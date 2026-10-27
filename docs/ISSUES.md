@@ -35,6 +35,7 @@
 | F11 | purge 在共享目录 000 时静默失败 | 缺陷 | ✅ | `uninstall_callback` `force_rm()` + 失败告知 |
 | F12 | 同版本打包只警告，装上去是空操作 | 缺陷 | ✅ | `build.sh` 默认阻断，`DSH_ALLOW_SAME_VERSION=1` 放行 |
 | F13 | 开发机上 selftest 大面积假失败 | 缺陷（测试） | ✅ | `selftest.sh` `cygpath -u` + 自动取 PATH 的 node |
+| F14 | 残留运行时让自测「骨架阶段」变成 dsh 阶段 | 缺陷（测试） | ✅ | `selftest.sh` 沙箱内移除 `runtime/app` + 断言模式 |
 | T1 | 0.5.0 未完成打包与真机安装 | — | ⚠️ | 下一步 |
 | T2 | cookie 跨重启 / 令牌是否一次性 | — | ⚠️ | `probe/07` |
 | T3 | 端口写死 3080，不可配置 | — | 📋 | 改端口=卸载重装 |
@@ -260,6 +261,44 @@ $ curl -s -o /dev/null -w '%{http_code}' "http://…/?token=A"$'\r'
 **注意**：跳过项仍是 Linux 专属断言（权限位、`/proc`、进程组），Windows 上的绿灯
 不代表这些项也验过。
 
+### F14 残留运行时让自测「骨架阶段」变成 dsh 阶段
+
+**现象**（2026-10-27，NAS 上首次跑到 Linux 全量断言）：
+
+```console
+== HTTP 探测
+  FAIL  GET / 返回 200（期望 200，实际 302）
+  PASS  GET /healthz 正常
+通过 54 / 跳过 0 / 失败 1
+```
+
+看着像入口跳转器坏了，实际是**这一段根本没有按骨架模式跑**。
+
+**根因**：`detect_mode()` 只判断 `runtime/app/node_modules/@deepseek-ai/dsh/package.json`
+存不存在。源码树里残留着上一次 `build.sh full` 装出来的运行时（`app/runtime/app` 与
+`app/runtime/node`），而这两个目录在 `.gitignore` 里——**`git pull` 不会替你清理**。
+于是沙箱副本带着 dsh 包，第一阶段被判成 dsh 模式：
+
+1. 跳转器占住 `service_port`（13080），dsh 退到 13081；
+2. `GET 13080/` 得到 302，而这一段断言是按骨架模式写的「应 200」；
+3. 下一段「模拟 dsh 模式」会用自己的假 dsh 覆盖 `package.json`，所以它反而全绿，
+   失败只出现在中间那一段，更容易误判。
+
+**日志里的铁证**：dsh 模式段打印的运行时路径是沙箱内的
+`target/runtime/node/bin/node`。若没有残留，`find_node()` 只会找到系统的
+`/var/apps/nodejs_v24/...`——出现沙箱路径就说明副本里有 bundled 运行时。
+
+**修法**（`selftest.sh`）：
+1. 复制 `app/` 进沙箱后，立刻 `rm -rf "$ROOT/target/runtime/app"`（只删副本，
+   源码树不动；`build.sh` 第 4 步会自己重建），并打印一行提示；
+2. 新增断言「本段跑的是骨架模式」（grep `start: mode=stub`），把模式错位与
+   HTTP 故障区分开——以后再遇到，失败项会直接说「模式不对」，不用再顺着 302 反推。
+
+**验证**：在开发机上人为放置一份残留 `runtime/app` 后跑自测，输出
+「沙箱内已移除残留的 dsh 运行时」，随后 `本段跑的是骨架模式`、`GET / 返回 200` 均 PASS，
+**30 通过 / 22 跳过 / 0 失败**；移除残留后再跑，结果相同。
+NAS 上预期 `56 通过 / 0 跳过 / 0 失败`（原 55 项 + 新增的模式断言）。
+
 
 ---
 
@@ -267,7 +306,8 @@ $ curl -s -o /dev/null -w '%{http_code}' "http://…/?token=A"$'\r'
 
 ### T1 0.5.0 未完成打包与真机安装 ⚠️
 
-0.5.0 的两次 `build.sh full` 都因自测中止（F7、F8）。修复后**尚未重跑**。
+0.5.0 的两次 `build.sh full` 都因自测中止（F7、F8）。第三次在 NAS 上跑到 Linux 全量
+断言，暴露出 F14（残留运行时导致模式错位，`通过 54 / 失败 1`）。F14 修复后**尚未重跑**。
 
 验收标准：`selftest` 全绿 → `install-fpk` 成功 → `05-verify-fpk.sh` 里
 `status=0`、3080 由 launcher 占、3081 在听、3080 返 302 带本次令牌、跟随跳转 303/200。

@@ -147,10 +147,37 @@ $ curl -s -o /dev/null -w '%{http_code}' "http://…/?token=A"$'\r'
 `selftest.sh` 同步加了「带 X-Forwarded-For 不自动跳转」的回归项。本轮没有动
 `cmd/main` 的进程编排，也没有实现「先换 cookie 再转发」——后者取决于 T2 的真机结论。
 
+## 阶段 9：第三次打包，暴露「残留运行时」（20:55）
+
+推上 Gitea 后在 NAS 上重跑，自测第一次跑满 Linux 全量断言：
+
+```console
+== HTTP 探测
+  FAIL  GET / 返回 200（期望 200，实际 302）
+通过 54 / 跳过 0 / 失败 1
+```
+
+**不是入口坏了，是这一段跑成了 dsh 模式。** `detect_mode()` 只看
+`runtime/app/node_modules/@deepseek-ai/dsh/package.json` 在不在；而源码树里残留着
+上一次 `build.sh full` 装出来的 `app/runtime/app`、`app/runtime/node`——这两个目录
+在 `.gitignore` 里，`git pull` 不会清。于是沙箱带着 dsh 包起步：跳转器占 13080、
+dsh 退到 13081，`GET 13080/` 返回 302，而该段断言写的是骨架模式的 200。
+
+铁证在日志里：dsh 模式段打印 `node=…/target/runtime/node/bin/node`。没有残留时
+`find_node()` 只会找到系统的 `/var/apps/nodejs_v24/...`。
+
+| 编号 | 改动 | 验证 |
+|---|---|---|
+| F14 | 沙箱复制后 `rm -rf target/runtime/app`（只删副本）+ 新增断言「本段跑的是骨架模式」 | 人为放置残留后自测：打印「已移除残留」、`GET /` 200，**30 通过 / 22 跳过 / 0 失败** |
+
+这个坑的教训比修法重要：**`.gitignore` 的构建产物不会随 `git pull` 消失**，
+而自测的假设建立在「源码树是干净的」之上。凡是「按目录存在性判断分支」的地方，
+都要先问一句「这个目录会不会是残留」。
+
 ## 下一步
 
-1. **重跑** `bash build.sh full`（自测必须全绿；本轮多了一条代理头回归，
-   通过数会比上次多 1），确认 `dsh 版本校验通过：0.2.1-rc.3`；
+1. **重跑** `bash build.sh full`（NAS 上预期 `56 通过 / 0 跳过 / 0 失败`），
+   确认 `dsh 版本校验通过：0.2.1-rc.3`；
 2. 界面卸载（保留）→ 手动安装 → 点图标应直接进入（不再出现配对页）；
 3. 跑 `probe/05-verify-fpk.sh` 与 `probe/07-cookie-persistence.sh`，回答 T2
    （cookie 是否活过重启、令牌是否一次性）；

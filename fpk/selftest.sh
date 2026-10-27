@@ -119,6 +119,18 @@ mkdir -p "$ROOT/target" "$ROOT/var" "$ROOT/etc" "$ROOT/home" "$ROOT/shares/works
 }
 # fpk 里 app/ 的内容会被装到 target/ 根下
 cp -a "$HERE/app/." "$ROOT/target/" || { say "复制 app/ 失败"; exit 1; }
+
+# 沙箱必须从「骨架模式」起步。
+# 源码树里可能残留上一次 full 构建的运行时（app/runtime/app 与 app/runtime/node），
+# 它们是 .gitignore 的，git pull 不会帮你清掉。只要 app/ 里带着 dsh 包，
+# detect_mode 就判成 dsh 模式 → 跳转器占住 service_port、GET / 变成 302，
+# 而这一段（安装/启停/端口/HTTP）是按骨架模式写的，断言会全线错位：
+# 现象就是「GET / 返回 200（期望 200，实际 302）」，看着像入口坏了，实际是模式错了。
+# 只删沙箱里的副本，源码树不动（build.sh 第 4 步会自己重建）。
+if [ -e "$ROOT/target/runtime/app" ]; then
+  rm -rf "$ROOT/target/runtime/app"
+  say "沙箱内已移除残留的 dsh 运行时——本段按骨架模式判定"
+fi
 say "工作目录：$ROOT"
 
 # ---------------------------------------------------------------- install
@@ -153,6 +165,12 @@ step "main start"
 lc "$HERE/cmd/main" start
 START_RC=$?
 check "start 退出码" "0" "$START_RC"
+
+# 把「本段跑的是哪个模式」直接断言出来。
+# 残留运行时会让本段悄悄变成 dsh 模式，症状是后面 GET / 期望 200 实际 302，
+# 很容易被误判成入口坏掉。单独断言模式，出问题一眼能分清是「模式错位」还是「HTTP 坏了」。
+check "本段跑的是骨架模式" "yes" \
+  "$(grep -q 'start: mode=stub' "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
 
 if [ "$START_RC" != "0" ] && [ -s "$ROOT/trim-err.txt" ]; then
   say "  用户在应用中心会看到："
