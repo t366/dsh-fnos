@@ -322,6 +322,22 @@ fs.chmodSync(SECRET_FILE, 0o600);
 **验证**：语法检查 + 自测 `30 通过 / 22 跳过 / 0 失败`，pair 段 8 项全绿。
 真机要等下一次装包才生效（当前装的 0.5.0 是修复前打的）。
 
+### F16 以 root 跑探针会把 dsh-home 写成 root 所有
+
+**现象**：`probe/07` 会 `stop` + `start` 一次。若像 2026-10-27 那样以 `root` 直接跑，
+dsh 也以 root 启动，于是 `dsh-home` 里新生成了 root 所有的 `-wal` / 会话库。
+
+**后果**：应用中心以 `dsh`(971) 启动时对这些文件没有写权限（目录是 `dsh:971 700`，
+但里面混了 `root:root` 的文件），轻则「会话少了」，重则 SQLite 打不开、dsh 起不来。
+而且这类故障不会报错，只会表现为「数据不见了」。
+
+**修法**：`probe/07` 增加 `run_main()`：当 `id -u = 0` 时用
+`su -s /bin/sh -c "'$ROOT/cmd/main' start" dsh` 降权执行，与 `run-as: package` 对齐；
+并在重启后 `find "$HOMEDIR" -user root` 自检，命中就报 FAIL 并给出 `chown` 命令。
+
+**已受影响的机器**：本机 2026-10-27 那次 `probe/07` 是 root 跑的，
+需要一次性 `chown -R dsh:AppUsers /vol1/@appshare/dsh/workspace/.dsh-home`。
+
 
 ---
 
@@ -387,7 +403,10 @@ dsh 的会话/数据库 schema 升级后不保证向下兼容。回滚边界见 
 `start` 21:09:47 → `ok` 21:09:51。解包完成后约 **22 秒**进入可用状态，安装前 `avail=194G`。
 比预想的「990MB 要装很久」快得多，瓶颈不在我们这边。
 
-**还没测**：磁盘峰值（解包瞬时占用）、装完的真实体积与文件数。
+**2026-10-27 补测**：装完真实占用 **957M / 63056 个文件**（包 990MB，解压后略小）。
+
+**还没测**：解包瞬间的磁盘峰值。`install_init` 卡的是「≥1.5GB 可用」，957M 的实际占用
+加解包临时文件（fnpack 会先写 `.tmp` 再改名）留的余量够用，但那只是推断，没有 `df` 峰值数据。
 
 **踩到的测量坑**：`du -sh /var/apps/dsh` 只报 **132K / 17 个文件**，因为
 `target`、`var`、`etc` 等都是软链，`du` 默认不跟随。真实内容在 `/vol1/@appcenter/dsh`。
@@ -396,6 +415,36 @@ dsh 的会话/数据库 schema 升级后不保证向下兼容。回滚边界见 
 ```bash
 du -sh /vol1/@appcenter/dsh                       # 真实占用
 find /vol1/@appcenter/dsh -type f | wc -l         # 文件数
+```
+
+### T10 应用中心只有「打开 / 卸载」，没有停止 ⚠️
+
+**现象**（2026-10-27，0.5.0 装完）：应用卡片上只有「打开」与「卸载」。用户因此
+没法在界面里重启应用，「应用中心启动后历史会话还在不在」这条就验证不了。
+
+**候选根因**（待一条命令定性）：
+
+1. 安装后的 manifest 丢了 `ctl_stop=true`。fnOS 会**重写** manifest（源 649B → 装后 942B），
+   若没保留这个键，平台就按 `ctl_stop=false` 处理——正是「只有打开/卸载」的表现；
+2. 平台把「运行中」判成「已停止」而隐藏停止项（与 F1 同源，F1 已修，但要看 `status` 实际返回）；
+3. 该版本把停止入口收进了应用详情页的「⋯」，不在列表卡片上（那就是文档问题，不是缺陷）。
+
+**定性命令**：
+
+```bash
+grep -iE 'ctl_stop|service_port|checkport' /var/apps/dsh/manifest
+/var/apps/dsh/cmd/main status; echo "rc=$?"
+appcenter-cli --help 2>&1 | head -30
+```
+
+`probe/05` 自本次起会断言 `ctl_stop=true`，以后每次验收都会直接暴露。
+
+**没有停止按钮时怎么重启**（也适用于验收）：
+
+```bash
+appcenter-cli stop dsh            # probe/06 已验证这个子命令可用
+appcenter-cli start dsh           # 若不存在，用下面这条
+su -s /bin/sh -c '/var/apps/dsh/cmd/main start' dsh    # 必须降权，见 F16
 ```
 
 ### T6 双网卡绑定选择 📋

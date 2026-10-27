@@ -73,11 +73,24 @@ esac
 DPORT=$((PORT + 1))
 BASED="http://$BINDIP:$DPORT"
 
+# 以应用用户身份跑 start/stop：应用中心自己就是这么做的（run-as package）。
+# root 直接 start 时 dsh 也以 root 写 dsh-home，留下 root 所有的 -wal/会话库，
+# 下次应用中心以 dsh(971) 启动就写不动 —— 表现为「会话少了」或干脆起不来。
+APP_USER="$(stat -Lc '%U' "$ROOT/var" 2>/dev/null || true)"
+[ -n "${APP_USER:-}" ] || APP_USER=dsh
+run_main() { # run_main start|stop
+  if [ "$(id -u)" = "0" ] && [ "$APP_USER" != "root" ] && command -v su >/dev/null 2>&1; then
+    su -s /bin/sh -c "'$ROOT/cmd/main' $1" "$APP_USER" >/dev/null 2>&1
+  else
+    "$ROOT/cmd/main" "$1" >/dev/null 2>&1
+  fi
+}
+
 # ---------------------------------------------------------------- 1. 确保在跑
 sec "1. 确保服务在运行"
 if ! "$ROOT/cmd/main" status >/dev/null 2>&1; then
   warn "当前未运行，先启动"
-  "$ROOT/cmd/main" start >/dev/null 2>&1 || { say "启动失败，先看 $ROOT/var/info.log"; exit 1; }
+  run_main start || { say "启动失败，先看 $ROOT/var/info.log"; exit 1; }
   sleep 1
 fi
 ok "服务在运行"
@@ -132,8 +145,9 @@ say "  带 cookie 访问 $BASED/ → HTTP $CODE2（期望 200）"
 
 # ---------------------------------------------------------------- 4. 重启
 sec "4. 重启应用"
-"$ROOT/cmd/main" stop >/dev/null 2>&1
-"$ROOT/cmd/main" start >/dev/null 2>&1
+[ "$(id -u)" = "0" ] && say "  以 $APP_USER 身份执行（root 下自动降权，避免写出 root 所有的会话文件）"
+run_main stop
+run_main start
 RC=$?
 say "  start 退出码：$RC"
 if [ "$RC" != "0" ]; then
@@ -150,6 +164,19 @@ while [ "$i" -lt 40 ]; do
   i=$((i + 1))
 done
 ok "服务已重新监听"
+
+# 归属校验：本轮（或历史上）以 root 跑过 start 的话，dsh-home 里会混进 root 所有的文件。
+HOMEDIR="$(grep -oE 'home=[^ ]+' "$ROOT/var/info.log" 2>/dev/null | tail -n1 | cut -d= -f2-)"
+if [ -n "${HOMEDIR:-}" ] && [ -d "$HOMEDIR" ]; then
+  ROOTOWN="$(find "$HOMEDIR" -user root 2>/dev/null | head -n 5)"
+  if [ -n "$ROOTOWN" ]; then
+    bad "dsh-home 里有 root 所有的文件" \
+        "应用中心以 $APP_USER 启动时可能写不动，先执行：chown -R $APP_USER \"$HOMEDIR\""
+    printf '%s\n' "$ROOTOWN" | sed 's/^/      /'
+  else
+    ok "dsh-home 归属干净" "$(stat -c '%U:%G %a' "$HOMEDIR" 2>/dev/null)"
+  fi
+fi
 
 # ---------------------------------------------------------------- 5. 判读
 sec "5. 重启后：点图标（不带任何 cookie）还能直接进吗"
@@ -220,7 +247,7 @@ else
 
     1) cat /var/apps/dsh/var/launcher.json    # token 字段是不是空
     2) tail -n 30 /var/apps/dsh/var/info.log  # 本次启动有没有抓到 token=
-    3) curl -s http://127.0.0.1:3080/healthz  # ready/auto 两个字段
+    3) curl -s http://$BINDIP:$PORT/healthz   # 注意是绑定地址，不是 127.0.0.1
 
   若 token 为空，说明 dsh 的入口 URL 没打进日志（格式变了或启动失败）。
 TXT

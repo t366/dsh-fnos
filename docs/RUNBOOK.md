@@ -141,6 +141,11 @@ bash ~/dsh-fnos/probe/07-cookie-persistence.sh 2>&1 | tee ~/p07.log
 
 会重启一次应用，约 10 秒不可用，期间不要用浏览器操作。
 
+> **这个探针会改归属，别用 root 跑。** 它内部 `stop`+`start` 一次；root 直接跑会让 dsh
+> 以 root 启动、把 `dsh-home` 里的 `-wal` 与会话库写成 root 所有，之后应用中心以 `dsh`
+> 身份启动就写不动（症状是「会话少了」，且不报错）。脚本已改成 root 下自动 `su` 到应用用户，
+> 并在重启后自检 `find "$HOMEDIR" -user root`；命中会直接报 FAIL 并给出 `chown` 命令。
+
 **0.5.0 已给出结论**（2026-10-27）：令牌**可复用**（连续两次不带 cookie 点图标都 303）、
 dsh 的 cookie **跨重启仍有效**（200）。所以「302 把令牌写进 `Location`」的设计成立，
 不需要改成「先换 cookie 再转发」。之后每版跑这一步当**回归**：

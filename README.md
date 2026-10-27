@@ -15,7 +15,7 @@
 | 最近一次完整真机验收 | **0.5.0 完整包**：`probe/05` **33 PASS / 1 WARN / 0 FAIL**，`probe/07` **10 PASS / 0 FAIL**；监听 `192.168.0.114:3080`，健康检查 `ready=true` |
 | 数据落点 | 共享目录 `dsh/workspace/.dsh-home`（**跨卸载存活**，已实测） |
 | 运行时 | 自带 Node 24（`v24.22.1`）+ `@deepseek-ai/dsh@0.2.1-rc.3`（钉版理由见 [PLAN §3.2](PLAN.md)） |
-| 尺寸 | 完整包约 990MB；装完的真实占用待测（`du /var/apps/dsh` 只有 132K，因为 `target/` 是软链，要 `du /vol1/@appcenter/dsh`） |
+| 尺寸 | 包约 990MB；装完实测 **957M / 63056 个文件**（`du -sh /vol1/@appcenter/dsh`，不含软链的 `/var/apps/dsh`） |
 | 已知问题 | 见 [docs/ISSUES.md](docs/ISSUES.md) |
 
 > 侧载包**没有 CLI 升级通道**：`appcenter-cli install-fpk` 对已装应用只回一句 `is installed`。

@@ -197,6 +197,31 @@ else
   bad "三处端口不一致" "症状是「能启动但点图标打不开」，且 checkport 会检查错端口"
 fi
 
+# ctl_stop 丢了 → 应用中心只给「打开 / 卸载」，没有停止、也没有重启入口。
+# 这条以前没断言，2026-10-27 真机上就是这么暴露的：功能全对，但点不到停止。
+CSTOP="$(mval ctl_stop || true)"
+if [ "$CSTOP" = "true" ]; then
+  ok "ctl_stop=true（应用中心有启停按钮）"
+else
+  bad "ctl_stop=${CSTOP:-<缺失>}" \
+      "应用中心只会显示「打开 / 卸载」，用户无法停止或重启；先确认打包后的 manifest 是否被改写"
+fi
+
+# 手工启动（无 TRIM_DATA_SHARE_PATHS）走的是回退路径，必须与安装时那次启动
+# 指向同一个 workspace。若指向两份，症状是「装完打开 dsh，历史会话全没了」——
+# 其实文件都在，只是换了目录，而且其中一份会随卸载消失。
+INST_HOME="$(grep -oE 'home=[^ ]+' "$ROOT/var/info.log" 2>/dev/null | head -n1 | cut -d= -f2-)"
+FB_DIR="$(readlink -f "$ROOT/shares/workspace" 2>/dev/null || true)"
+if [ -n "${INST_HOME:-}" ] && [ -n "${FB_DIR:-}" ]; then
+  INST_DIR="$(dirname "$INST_HOME")"
+  if [ "$(readlink -f "$INST_DIR" 2>/dev/null)" = "$FB_DIR" ]; then
+    ok "手工启动与安装启动指向同一 workspace" "$FB_DIR"
+  else
+    bad "存在两套 workspace" \
+        "安装时：$INST_DIR / 回退：$FB_DIR —— 会出现「会话凭空消失」"
+  fi
+fi
+
 # 目录遍历位：fnOS 装完后 config/ wizard/ 的 mode 会变成 644（丢了 +x）。
 # 实测无害：向导由安装器（root）读，钩子只在 cmd/ 下执行，两处都不需要穿这两个目录。
 # 所以这里只陈述，不告警——避免每次验收都出现两条永远不变的 WARN。
