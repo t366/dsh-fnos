@@ -385,7 +385,8 @@ JS
 
     stop_gate() {
       [ -n "${G_PID:-}" ] && kill "$G_PID" 2>/dev/null
-      sleep 0.3
+      # 等端口真正释放：紧接着要用同一个端口起下一个模式，太快会 EADDRINUSE
+      sleep 0.5
     }
 
     hdr() { curl -s -m 5 -o /dev/null -D - "$@" 2>/dev/null; }
