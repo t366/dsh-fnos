@@ -1,6 +1,6 @@
 # 上真机 runbook —— 打包 → 卸载保留 → 手动安装 → 验收
 
-给 0.5.0 这一版写的执行清单，之后每个版本都可以照抄（把版本号换掉）。
+给 0.6.0 这一版写的执行清单，之后每个版本都可以照抄（把版本号换掉）。
 
 **三条硬规则，先看再动手**
 
@@ -21,8 +21,15 @@ grep -E '^[[:space:]]*version' /var/apps/dsh/manifest
 
 | 输出 | 怎么做 |
 |---|---|
-| `0.5.0`（与 `fpk/manifest` 相同） | 先把 `fpk/manifest` 的 `version` 提到 `0.5.1` 再打包，否则 `build.sh` 会直接 `die`（F12 版本守卫） |
+| `0.5.0` | 直接进第 1 步：仓库里的 `manifest` 已经是 `0.6.0`，比它高一级，能正常覆盖 |
+| `0.6.0`（与 `fpk/manifest` 相同） | 先把 `fpk/manifest` 的 `version` 提到 `0.6.1` 再打包，否则 `build.sh` 会直接 `die`（F12 版本守卫） |
 | 其他（`0.2.0` / `0.4.0` …） | 直接进第 1 步 |
+
+顺手确认一下仓库里的版本（第 1 步 `git pull` 之后再跑）：
+
+```bash
+grep -E '^version' ~/dsh-fnos/fpk/manifest    # 期望 version="0.6.0"
+```
 
 > 为什么必须管：`appcenter-cli install-fpk` 对已装应用只回一句 `is installed`，
 > 同版本装上去 `target/` 不会更新。**2026-10-27 之前这条只打警告**，看起来像装成功了。
@@ -40,10 +47,11 @@ git log --oneline -1
 期望最后一行是：
 
 ```
-72f080b 修复 auto 模式经反代后公网免令牌进入，并补四项健壮性
+438d816 ISSUES: P0 改用端口属主判定——外部探测无法区分 root 残留与平台拉起
 ```
 
 不是这条就先别打包——`build.sh` 打的是工作区里的代码，不是远端。
+**以版本号为准更稳**：`grep '^version' fpk/manifest` 必须是 `0.6.0`。
 
 ---
 
@@ -86,11 +94,31 @@ dsh 版本校验通过：0.2.1-rc.3
 
 ## 第 4 步　卸载（选保留）→ 手动安装
 
+### 4.0　先开一个磁盘采样（T5 只剩这一个缺口，只做这次）
+
+**另开一个 SSH 窗口**，在点安装之前跑起来，装完回来 `Ctrl-C`：
+
+```bash
+( while :; do printf '%s %s\n' "$(date '+%T')" "$(df -m /vol1 | awk 'NR==2{print $4}')"; sleep 2; done ) \
+  | tee ~/df-peak.log
+```
+
+装完算峰值：
+
+```bash
+awk 'NF==2 && $2 ~ /^[0-9]+$/ {print $2}' ~/df-peak.log | sort -n | head -1   # 全程最小可用（MB）
+```
+
+「安装前可用 − 全程最小可用」= 解包瞬时占用。只关心它有没有逼近 `install_init` 卡的 1.5GB 线。
+
+### 4.1　卸载与安装
+
 1. 应用中心 → dsh → **卸载** → 弹窗选「**保留会话、凭据与设置**」；
 2. 应用中心 → **手动安装** → 选刚下载的 `dsh.fpk` → 安装；
    - 向导里 **API Key 留空 = 沿用旧值**，不要为了"干净"重填；
    - 「入口方式」保持默认「点图标直接进入」；
 3. 装完点桌面图标，应当直接进 dsh，不出现配对页。
+4. **看应用卡片上有没有「停止」**——这是 F17/T10 的验收点，有就说明回环探测那条推断成立。
 
 ---
 
@@ -99,8 +127,10 @@ dsh 版本校验通过：0.2.1-rc.3
 ```bash
 bash ~/dsh-fnos/probe/05-verify-fpk.sh 2>&1 | tee ~/p05.log
 
-# healthz 要走绑定地址：127.0.0.1 不通（launcher 绑的是局域网 IP），
-# 用回环 curl 只会得到空响应，看起来像没起来。
+# 0.6.0 起 launcher 同时在 127.0.0.1 上监听（F17），这一条本身就是验收项：
+curl -s -o /dev/null -w 'loop=%{http_code}\n' http://127.0.0.1:3080/healthz
+
+# 局域网绑定地址也应正常（0.5.0 及以前只有这一个监听）：
 BIND=$(sed -n 's/^DSH_BIND=//p' /var/apps/dsh/etc/settings.conf | head -n1)
 case "$BIND" in ''|auto) BIND=$(sed -n 's/.*bind=\([0-9.]*\).*/\1/p' /var/apps/dsh/var/info.log | tail -n1) ;; esac
 curl -s "http://${BIND:-127.0.0.1}:3080/healthz"; echo
@@ -112,6 +142,7 @@ du -sh /vol1/@appcenter/dsh; find /vol1/@appcenter/dsh -type f | wc -l
 判据：
 
 - 末尾 `FAIL` 必须为 **0**（`WARN` 允许存在，逐条看是不是已知的那几项）；
+- `loop=200` —— 这是 F17 生效的直接证据；若仍是 `000`，说明回环双绑没进包；
 - `healthz` 返回 `{"ok":true,"ready":true,"auto":true,"mode":"auto"}`；
 - 重点看它报的三处端口是否一致、`cmd/*` 执行位是否 9 个都在。
 

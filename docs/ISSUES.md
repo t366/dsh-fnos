@@ -56,27 +56,45 @@
 
 > 截至 2026-10-27 23:34，代码 `ec1b0b1`、已装包 `0.5.0`。只列**还没关闭**的项；已修条目见第二节。
 
-### P0 先确认现在跑的是谁：服务「看起来在跑」，但身份没定
+### P0 当前实例归属 ✅ 已关闭（2026-10-27 23:37）
 
-F16 → F18 的连锁结果：root 起的跳转器占着 `192.168.0.114:3080`，`appcenter-cli stop`
-杀不掉它却删了 pidfile，于是三个状态同时成立——**平台认为已停、端口仍被占、`start` 回 10330**。
+**背景**：F16 → F18 的连锁——root 起的跳转器占着 `192.168.0.114:3080`，`appcenter-cli stop`
+杀不掉它却删了 pidfile，于是三个状态同时成立：平台认为已停、端口仍被占、`start` 回 10330。
 
-**外部探测区分不了这一层。** 2026-10-27 23:35 实测：`3080/healthz` → `200`、`3081` → `401`，
-但「平台重新拉起的实例」与「21:13 那个 root 进程」都会给出同样结果。判据只有端口属主：
+**外部探测区分不了这一层**（23:35 实测 `3080/healthz` → 200、`3081` → 401，root 残留与
+平台拉起的实例给出同样结果）。判据只有端口属主：
 
 ```bash
 ss -ltnp | grep -E ':308[01]'
 ps -o user=,args= -p "$(cut -d' ' -f1 /var/apps/dsh/var/dsh.pid)" 2>/dev/null || echo "无 pidfile"
 ```
 
-属主是 `dsh` 才算正常。若是 `root`（或没有 pidfile 却仍有端口占用），按
-[RUNBOOK「EADDRINUSE 3080」](RUNBOOK.md) 处置：按端口反查 pid → `kill` →（端口释放后）
-`appcenter-cli start dsh`。**别用 root 手工 `cmd/main start` 应急**，那正是这条链的起点。
+**实测结果（23:37）：正常。**
+
+```
+LISTEN 192.168.0.114:3081  pid=3359059
+LISTEN 192.168.0.114:3080  pid=3359039
+dsh  /vol1/@appcenter/dsh/runtime/node/bin/node …/dsh/lib/bin.js --profile web --host 192.168.0.114 --port 3081
+```
+
+pidfile 存在、属主 `dsh`、命令行与 `--port 3081` 都对得上，PID 已是新一轮（`3359xxx`，
+此前 root 那批是 `3280xxx`）——即**由平台拉起、以应用用户运行**，不再是残留。
+
+**残留的一项**：`dsh-home` 里仍有 1 个 root 所有的旧会话文件（F16 造成，见
+`find … -user root`）。它不影响启动，但那一条会话可能写不回去，建议顺手修掉：
+
+```bash
+find /vol1/@appshare/dsh/workspace/.dsh-home -user root -exec chown dsh:AppUsers {} + ; \
+  find /vol1/@appshare/dsh/workspace/.dsh-home -user root | wc -l    # 期望 0
+```
+
+以后同类现象照上面的判据走；处置步骤见 [RUNBOOK「EADDRINUSE 3080」](RUNBOOK.md)，
+**别用 root 手工 `cmd/main start` 应急**，那正是这条链的起点。
 
 ### P1 已修、等下一次装包才生效
 
 打包前必须把 `manifest` 的 `version` 从 `0.5.0` 提到 **`0.6.0`**——`build.sh` 现在遇到
-同版本会直接 `die`（F12）。一次打包把这四项全带上：
+同版本会直接 `die`（F12）。**已提（2026-10-27 23:38）**，一次打包把这四项全带上：
 
 | 项 | 生效后应看到 |
 |---|---|
@@ -92,7 +110,7 @@ ps -o user=,args= -p "$(cut -d' ' -f1 /var/apps/dsh/var/dsh.pid)" 2>/dev/null ||
 | 项 | 判据 | 前置 |
 |---|---|---|
 | T10 停止按钮 | 卡片上出现「停止」 | 0.6.0 装包 |
-| 历史会话是否还在 | 由**平台**启动后，侧栏旧会话仍在 | 0.6.0 装包 + 用应用中心启动 |
+| 历史会话是否还在 | 由**平台**启动后，侧栏旧会话仍在 | **现在就能验**（见 P0：实例已是平台拉起） |
 | T5 解包峰值 | 安装时轮询 `df`，峰值不超 1.5GB 阈值余量 | 0.6.0 安装 |
 | T6 双网卡 | 从 `.109` 与 `.114` 两侧都能打开入口 | 无 |
 | T4 能否降级 | 快照回滚后旧 dsh 读不读得动新 schema | 无（高风险，可长期搁置） |
