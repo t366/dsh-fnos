@@ -370,6 +370,25 @@ JS
     "$NODE_FOR_TEST" "$G/up.cjs" --port "$UP" --token "$TOK" >"$G/up.log" 2>&1 &
     UP_PID=$!
 
+    # 等假上游真的开始监听再往下走。
+    # 不等的话第一发 curl 会在 node 冷启动的窗口里被拒（exit 7），http_code 记成 000，
+    # 看起来像「跳转器给了错地址」，实际只是测试跑得比上游快。真机上 node 冷启要几百毫秒，
+    # 打包时机器还有别的负载，这个窗口很容易撞上。
+    wait_up() {
+      local i=0 code
+      while [ "$i" -lt 80 ]; do
+        code="$(curl -s -m 1 -o /dev/null -w '%{http_code}' \
+                 "http://127.0.0.1:$UP/?token=$TOK" 2>/dev/null)"
+        [ "$code" = "303" ] && return 0
+        sleep 0.25
+        i=$((i + 1))
+      done
+      return 1
+    }
+    if ! wait_up; then
+      printf '  \033[33mWARN\033[0m  假上游 20s 内没就绪（看 %s）\n' "$G/up.log"
+    fi
+
     start_gate() { # $1=auth
       "$NODE_FOR_TEST" "$HERE/app/runtime/launcher/server.mjs" \
         --host 127.0.0.1 --port "$GP" --state "$G/launcher.json" --auth "$1" >"$G/gate.log" 2>&1 &
@@ -407,8 +426,26 @@ JS
         "$(printf '%s' "$LOC" | grep -q "http://127.0.0.1:$UP/" && echo yes || echo no)"
       # 令牌拿去请求上游必须是 303（假 dsh 认得它）。这条能抓住 Location 拼错、
       # 端口写错、token 截断之类「看着像 302 但点了进不去」的问题。
-      check "auto：上游接受这条令牌（303）" "303" \
-        "$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$LOC" 2>/dev/null)"
+      ACODE="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$LOC" 2>/dev/null)"
+      if [ "$ACODE" != "303" ]; then
+        # 单发 000 多半是瞬时的连接失败（上游刚起、或 accept 队列被别的请求占着），
+        # 重试两次；仍然不行才判失败，并把证据打出来，省得又要人肉回传现场。
+        for _ in 1 2; do
+          sleep 0.4
+          ACODE="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$LOC" 2>/dev/null)"
+          [ "$ACODE" = "303" ] && break
+        done
+      fi
+      check "auto：上游接受这条令牌（303）" "303" "${ACODE:-无}"
+      if [ "$ACODE" != "303" ]; then
+        printf '    诊断 LOC=%s\n' "$LOC"
+        printf '    诊断 curl：%s\n' \
+          "$(curl -s -m 5 -o /dev/null "$LOC" 2>&1 | head -n 2 | tr '\n' ' ')"
+        printf '    诊断 上游日志：%s\n' \
+          "$(tr '\n' ' ' <"$G/up.log" 2>/dev/null | head -c 300)"
+        printf '    诊断 监听：%s\n' \
+          "$(ss -ltn 2>/dev/null | grep -E ":$UP " | tr -s ' ')"
+      fi
       check "auto：/healthz 自报 auto" "yes" \
         "$(curl -s -m 3 "http://127.0.0.1:$GP/healthz" 2>/dev/null | grep -q '"auto":true' && echo yes || echo no)"
       stop_gate
