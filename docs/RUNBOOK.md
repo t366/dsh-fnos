@@ -59,7 +59,7 @@ bash build.sh full 2>&1 | tee ~/build-$(grep -E '^version' manifest | cut -d'"' 
 **必须看到这三行，缺一行就是没过：**
 
 ```
-通过 56 / 跳过 0 / 失败 0
+通过 58 / 跳过 0 / 失败 0
 dsh 版本校验通过：0.2.1-rc.3
 产物：./dsh.fpk（…）
 ```

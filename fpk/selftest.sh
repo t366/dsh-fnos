@@ -422,13 +422,14 @@ JS
       printf '  \033[33mWARN\033[0m  假上游 20s 内没就绪（看 %s）\n' "$G/up.log"
     fi
 
-    start_gate() { # $1=auth
+    start_gate() { # $1=auth  $2=host（默认回环；给非回环地址时才有回环备份监听）
+      local h="${2:-127.0.0.1}"
       "$NODE_FOR_TEST" "$HERE/app/runtime/launcher/server.mjs" \
-        --host 127.0.0.1 --port "$GP" --state "$G/launcher.json" --auth "$1" >"$G/gate.log" 2>&1 &
+        --host "$h" --port "$GP" --state "$G/launcher.json" --auth "$1" >"$G/gate.log" 2>&1 &
       G_PID=$!
       i=0
       while [ "$i" -lt 40 ]; do
-        if curl -s -m 1 -o /dev/null "http://127.0.0.1:$GP/healthz" 2>/dev/null; then return 0; fi
+        if curl -s -m 1 -o /dev/null "http://$h:$GP/healthz" 2>/dev/null; then return 0; fi
         sleep 0.25
         i=$((i + 1))
       done
@@ -457,7 +458,9 @@ JS
 
     if ! start_gate auto; then
       check "跳转器可启动（auto）" "yes" "no（看 $G/gate.log）"
-      SKIP=$((SKIP + 11))
+      # 起不来时把整段（auto 7 + 无令牌 1 + 双绑 2 + pair 8）都记成跳过，
+      # 别让「0 失败」看起来像验过。数量变了就跟着改。
+      SKIP=$((SKIP + 18))
     else
       # ---- auto：点图标直接进（这是用户唯一想做的事）----
       H="$(hdr "http://127.0.0.1:$GP/")"
@@ -510,6 +513,21 @@ JS
       if start_gate auto; then
         check "auto：无令牌给说明页而非 302" "200" \
           "$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$GP/" 2>/dev/null)"
+      fi
+      stop_gate
+
+      # 绑非回环地址时必须同时在 127.0.0.1 上监听：应用中心的运行状态判定与本机
+      # 自检连的都是回环，只有 LAN 监听时平台会认为「未运行」，卡片上就只剩
+      # 「打开 / 卸载」（2026-10-27 真机现象，manifest 里 ctl_stop 是 true 也没用）。
+      # 用 127.0.0.2 冒充「非回环」，避免依赖这台机器真实网卡。
+      mkstate "$TOK"
+      if start_gate auto 127.0.0.2; then
+        check "双绑：给 LAN 地址时回环也监听" "yes" \
+          "$(curl -s -m 2 -o /dev/null "http://127.0.0.1:$GP/healthz" 2>/dev/null && echo yes || echo no)"
+        check "双绑：原地址仍可访问" "yes" \
+          "$(curl -s -m 2 -o /dev/null "http://127.0.0.2:$GP/healthz" 2>/dev/null && echo yes || echo no)"
+      else
+        check "双绑：给 LAN 地址时回环也监听" "yes" "no（launcher 没起来，看 $G/gate.log）"
       fi
       stop_gate
 

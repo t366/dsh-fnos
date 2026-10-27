@@ -330,7 +330,7 @@ const redirect = (res, location, extra) => {
   res.end();
 };
 
-const server = http.createServer(async (req, res) => {
+const handler = async (req, res) => {
   const ip = req.socket.remoteAddress || '?';
   const url = new URL(req.url || '/', `http://${req.headers.host || HOST}`);
 
@@ -445,7 +445,9 @@ const server = http.createServer(async (req, res) => {
   }
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
   res.end(pairPage(''));
-});
+};
+
+const server = http.createServer(handler);
 
 loadSecret();
 
@@ -458,9 +460,26 @@ server.listen(PORT, HOST, () => {
   log(`listening on http://${HOST}:${PORT} (auth=${AUTH} state=${STATE_FILE || 'none'})`);
 });
 
+// 回环也要有监听：应用中心的「运行中」判定与本机自检连的都是 127.0.0.1。
+// 只绑局域网地址时，平台那边是 ECONNREFUSED，卡片上就只剩「打开 / 卸载」，
+// 没有停止——2026-10-27 真机就是这么暴露的（manifest 里 ctl_stop 明明是 true）。
+// 失败只记日志：局域网访问不受影响，别为了一个本地检查把入口整个起不来。
+const LOOPBACKS = new Set(['127.0.0.1', '::1', 'localhost', '0.0.0.0', '::']);
+let loServer = null;
+if (!LOOPBACKS.has(HOST)) {
+  loServer = http.createServer(handler);
+  loServer.on('error', (e) => {
+    log(`loopback listen failed: ${e.message}（平台仍可能把应用当成未运行）`);
+  });
+  loServer.listen(PORT, '127.0.0.1', () => {
+    log(`listening on http://127.0.0.1:${PORT} (loopback, 供平台与本机自检)`);
+  });
+}
+
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, () => {
     log(`${sig} received, closing`);
+    if (loServer) loServer.close();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 2000).unref();
   });

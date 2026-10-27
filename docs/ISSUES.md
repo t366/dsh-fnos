@@ -298,7 +298,7 @@ $ curl -s -o /dev/null -w '%{http_code}' "http://…/?token=A"$'\r'
 **验证**：在开发机上人为放置一份残留 `runtime/app` 后跑自测，输出
 「沙箱内已移除残留的 dsh 运行时」，随后 `本段跑的是骨架模式`、`GET / 返回 200` 均 PASS，
 **30 通过 / 22 跳过 / 0 失败**；移除残留后再跑，结果相同。
-NAS 上预期 `56 通过 / 0 跳过 / 0 失败`（原 55 项 + 新增的模式断言）。
+NAS 上预期 `58 通过 / 0 跳过 / 0 失败`（原 55 项 + 模式断言 + 双绑 2 项）。
 
 ### F15 旧版留下的配对密钥 700 永不自愈
 
@@ -337,6 +337,30 @@ dsh 也以 root 启动，于是 `dsh-home` 里新生成了 root 所有的 `-wal`
 
 **已受影响的机器**：本机 2026-10-27 那次 `probe/07` 是 root 跑的，
 需要一次性 `chown -R dsh:AppUsers /vol1/@appshare/dsh/workspace/.dsh-home`。
+
+### F17 入口只绑局域网地址，平台/本地自检连不上回环
+
+**现象**：应用中心卡片只有「打开 / 卸载」，没有停止。但安装后的 manifest 里
+`ctl_stop = true`、`cmd/main status` 返回 0、`service_port = 3080` 三处一致——
+也就是说「不可启停」这条官方语义**并不成立**，问题在别处。
+
+**推断的根因**：launcher 只 `listen(PORT, HOST)`，而 `HOST` 是自动探测到的局域网地址
+（`192.168.0.114`）。回环上没有监听，于是：
+
+- 平台对 `service_port` 的本地探测（`127.0.0.1:3080`）是 ECONNREFUSED；
+- 任何本机命令 `curl http://127.0.0.1:3080/healthz` 也不通（这个坑在 README 里
+  已经踩过一次，当时只改了文档，没改根因）。
+
+平台拿不到「在跑」的证据，就按未运行渲染，启停入口随之消失。
+
+**修法**：`launcher` 在 `--host` 不是回环时，**额外**在 `127.0.0.1` 上起一个监听，
+共用同一个 handler。局域网访问不受影响；回环监听失败只记日志，不阻止启动
+（不能为了一个本地检查把入口整个起不来）。
+
+**验证**：自测新增两条断言（用 `127.0.0.2` 冒充非回环地址）——「给 LAN 地址时回环也监听」
+与「原地址仍可访问」，Windows 上 `32 通过 / 22 跳过 / 0 失败`。
+**真机待确认**：装上新包后应用中心是否出现停止按钮。若仍然没有，说明平台不是靠回环探测，
+要往「第三方应用不出启停」这个方向查。
 
 
 ---
@@ -429,12 +453,28 @@ find /vol1/@appcenter/dsh -type f | wc -l         # 文件数
 2. 平台把「运行中」判成「已停止」而隐藏停止项（与 F1 同源，F1 已修，但要看 `status` 实际返回）；
 3. 该版本把停止入口收进了应用详情页的「⋯」，不在列表卡片上（那就是文档问题，不是缺陷）。
 
-**定性命令**：
+**定性结果（2026-10-27，`diag-1027.txt`）**：
+
+```
+ctl_stop = true          ← 候选 1 排除：键在、值对
+status   rc=0            ← 候选 2 中「我们的 status」这半排除
+两套 workspace → 同一目录（都是 /vol1/@appshare/dsh/workspace）
+dsh-home 里 root 所有的文件：1 个（session-e40256df…json，F16 造成）
+appcenter-cli 有 start / stop / status
+```
+
+所以 `ctl_stop` 与 `cmd/main status` 都没问题，剩最可能的一条是**平台自己探测不到端口**：
+launcher 只绑了 `192.168.0.114:3080`，回环上没有监听 → 平台按未运行渲染。已作为 **F17** 修掉
+（launcher 双绑），下次装包验证按钮是否出现。
+
+定性命令（以后同类问题照抄）：
 
 ```bash
 grep -iE 'ctl_stop|service_port|checkport' /var/apps/dsh/manifest
 /var/apps/dsh/cmd/main status; echo "rc=$?"
-appcenter-cli --help 2>&1 | head -30
+appcenter-cli status dsh          # 平台的判断，与我们自己的 status 对照
+curl -s -o /dev/null -w 'loop=%{http_code}\n' http://127.0.0.1:3080/healthz
+curl -s -o /dev/null -w 'lan=%{http_code}\n'  http://192.168.0.114:3080/healthz
 ```
 
 `probe/05` 自本次起会断言 `ctl_stop=true`，以后每次验收都会直接暴露。
@@ -442,9 +482,9 @@ appcenter-cli --help 2>&1 | head -30
 **没有停止按钮时怎么重启**（也适用于验收）：
 
 ```bash
-appcenter-cli stop dsh            # probe/06 已验证这个子命令可用
-appcenter-cli start dsh           # 若不存在，用下面这条
-su -s /bin/sh -c '/var/apps/dsh/cmd/main start' dsh    # 必须降权，见 F16
+appcenter-cli stop dsh            # 1.0.2 有 stop / start / status 三个子命令
+appcenter-cli start dsh
+su -s /bin/sh -c '/var/apps/dsh/cmd/main start' dsh    # 退路；必须降权，见 F16
 ```
 
 ### T6 双网卡绑定选择 📋
