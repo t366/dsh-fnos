@@ -357,7 +357,7 @@ if [ "$FAIL" -eq 0 ]; then
   if [ -f "${TARGET:-/nonexistent}/runtime/app/node_modules/@deepseek-ai/dsh/package.json" ]; then
     printf '下一步：从另一台设备浏览器打开 http://<本机IP>:%s/ ，粘贴一次令牌完成配对，之后点图标即可进入。\n' "$PORT_EXPECT"
   else
-    printf '下一步：换 full 包塞入 dsh 运行时：DSH_VERSION=0.2.1-rc.2 bash build.sh full\n'
+    printf '下一步：换 full 包塞入 dsh 运行时：bash build.sh full（版本已钉在 build.sh 里）\n'
   fi
   exit 0
 else

@@ -17,7 +17,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE"
 
 MODE="${1:-skeleton}"
-DSH_VERSION="${DSH_VERSION:-0.2.1-rc.2}"
+DSH_VERSION="${DSH_VERSION:-0.2.1-rc.3}"
 NODE_SRC="${NODE_SRC:-/var/apps/nodejs_v24/target}"
 
 say() { printf '%s\n' "$*"; }
@@ -228,11 +228,26 @@ if [ "$MODE" = "full" ]; then
 
   ( cd app/runtime/app
     say "安装 @deepseek-ai/dsh@$DSH_VERSION ..."
+    say "npm registry: $("$NODE_SRC/bin/npm" config get registry 2>/dev/null)"
     "$NODE_SRC/bin/npm" init -y >/dev/null 2>&1 || true
     # 显式 --prefix：飞牛的 npm 全局 prefix 指向 /usr/local，不能让它污染系统盘
     "$NODE_SRC/bin/npm" install --omit=dev --no-audit --no-fund \
       --prefix "$PWD" "@deepseek-ai/dsh@$DSH_VERSION" \
       >/tmp/dsh-npm-install.log 2>&1 || { tail -n 30 /tmp/dsh-npm-install.log; die "npm install 失败"; }
+
+    # 回读实际装进来的版本并校验。
+    # 起因：dsh 的 npm dist-tags 与 GitHub 发布不同步（latest 落后两个 RC，
+    # 另有只存在于 npm、无 GitHub release 的重发版），见 PLAN §3.2。
+    # 不校验的话，一个"看起来是 rc.3 实际是 rc.2"的包会被直接打进 fpk，
+    # 而这类差异只有在真机上跑起来才暴露。
+    PKGJSON="node_modules/@deepseek-ai/dsh/package.json"
+    [ -f "$PKGJSON" ] || die "安装后找不到 $PKGJSON，npm 没有真正装成功"
+    GOT="$(sed -nE 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$PKGJSON" | head -n1)"
+    if [ -z "$GOT" ]; then   # 压缩成一行的 package.json：退回用 node 解析
+      GOT="$("$NODE_SRC/bin/node" -p "JSON.parse(require('fs').readFileSync('$PKGJSON','utf8')).version" 2>/dev/null || true)"
+    fi
+    [ "$GOT" = "$DSH_VERSION" ] || die "版本不符：请求 $DSH_VERSION，实际装到 ${GOT:-未知}"
+    say "dsh 版本校验通过：$GOT"
   )
   say "运行时就绪"
 else

@@ -103,6 +103,7 @@ cat /var/apps/dsh/var/dsh.pid && ps -o pid,pgid,cmd -p "$(awk '{print $1}' /var/
 bash build.sh full
 ```
 
-它会把 `nodejs_v24` 的 node 二进制和 `@deepseek-ai/dsh@0.2.1-rc.2` 装进 `app/runtime/`，产出约 990MB / 6 万+ 文件的包。这一步要验证的是 PLAN §6.1 里那个没答案的问题：**fnOS 能不能顺利装下六万个文件**。
+它会把 `nodejs_v24` 的 node 二进制和 `@deepseek-ai/dsh@0.2.1-rc.3`（版本钉在 `build.sh` 顶部，
+可用 `DSH_VERSION=` 覆盖；钉版理由见 PLAN §3.2）装进 `app/runtime/`，产出约 990MB / 6 万+ 文件的包。这一步要验证的是 PLAN §6.1 里那个没答案的问题：**fnOS 能不能顺利装下六万个文件**。
 
 如果 `full` 包安装超时或失败，退路是在 `install_callback` 里解 `app.tar.zst`，而不是让 fnpack 直接打散六万个文件。

@@ -46,7 +46,7 @@ bash ~/02-smoke-dsh.sh
 BIND_IP=127.0.0.1 bash ~/02-smoke-dsh.sh   # 只在本机回环验证（最保守）
 BIND_IP=192.168.0.114 bash ~/02-smoke-dsh.sh  # 指定网卡（双地址环境推荐显式指定）
 PORT=3099 bash ~/02-smoke-dsh.sh           # 换端口
-PKG=@deepseek-ai/dsh@0.2.1-rc.2 bash ~/02-smoke-dsh.sh  # 钉版本（默认装 latest）
+PKG=@deepseek-ai/dsh@0.2.1-rc.3 bash ~/02-smoke-dsh.sh  # 钉版本（默认装 latest，而 latest 落后两个 RC）
 NODE_BIN=/var/apps/nodejs_v24/.../node bash ~/02-smoke-dsh.sh  # 指定运行时
 WORKDIR=/vol1/dsh-probe bash ~/02-smoke-dsh.sh   # 装到数据卷
 CLEAN=1 bash ~/02-smoke-dsh.sh             # 跑完删掉临时目录
