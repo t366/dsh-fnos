@@ -49,8 +49,9 @@ LOGFILE="$PKGVAR/info.log"
 SETTINGS="$PKGETC/settings.conf"
 URLFILE="$PKGVAR/dsh-url.txt"
 
-# 入口跳转器（方案 B）：service_port 归它，dsh 退到 service_port+1。
-# 目的：点图标即进，同时保留令牌栅栏（未配对的设备只能看到粘贴页）。
+# 入口跳转器：service_port 归它，dsh 退到 service_port+1。
+# 目的：点图标即进 —— 跳转器读本次启动的令牌，直接 302 到带 token 的地址，
+# 用户不用再去命令行取令牌。DSH_ENTRY=pair 可退回「粘贴一次令牌」的旧行为。
 LAUNCHER_PIDFILE="$PKGVAR/launcher.pid"
 LAUNCHER_ENTRY="$RUNTIME/launcher/server.mjs"
 STATEFILE="$PKGVAR/launcher.json"
@@ -104,9 +105,14 @@ load_settings() {
   DSH_PORT="$(get_conf DSH_PORT || true)"
   DSH_BIND="$(get_conf DSH_BIND || true)"
   DSH_API_KEY="$(get_conf DSH_API_KEY || true)"
+  DSH_ENTRY="$(get_conf DSH_ENTRY || true)"
 
   [ -n "${DSH_PORT:-}" ] || DSH_PORT="$DEFAULT_PORT"
   [ -n "${DSH_BIND:-}" ] || DSH_BIND="auto"
+  case "${DSH_ENTRY:-}" in
+    pair|PAIR|Pair) DSH_ENTRY="pair" ;;
+    *) DSH_ENTRY="auto" ;;
+  esac
 
   case "$DSH_PORT" in
     ''|*[!0-9]*) DSH_PORT="$DEFAULT_PORT" ;;
@@ -374,7 +380,7 @@ start_launcher() { # $1=bind
   local bind="$1" lpid t
   [ -f "$LAUNCHER_ENTRY" ] || die "缺少入口跳转器：$LAUNCHER_ENTRY（请重新安装应用）"
   spawn_bg "$LAUNCHER_PIDFILE" "$NODE_BIN" "$LAUNCHER_ENTRY" \
-    --host "$bind" --port "$DSH_PORT" --state "$STATEFILE"
+    --host "$bind" --port "$DSH_PORT" --state "$STATEFILE" --auth "${DSH_ENTRY:-auto}"
   lpid="$SPAWN_PID"
   if ! wait_for_port "$bind" "$DSH_PORT" "$PORT_TIMEOUT" "$lpid"; then
     t="$(tail -n 10 "$LOGFILE" 2>/dev/null)"
@@ -393,12 +399,16 @@ start_launcher() { # $1=bind
 
 # 跳转器从 state 文件读「这一轮的入口 URL」。dsh 每次启动都会换 token，
 # 所以 dsh 起来之后必须立刻刷新这个文件，否则用户点图标会被送到旧 token。
+#
+# token 单独存一份（而不是只存 url）：url 里 dsh 打的主机名可能是 127.0.0.1，
+# 跳转器必须用「绑定 IP + 内部端口」重建地址，只有 token 是真正需要传下去的。
 write_state() { # $1=bind
-  local url=""
+  local url="" tok=""
   [ -s "$URLFILE" ] && url="$(head -n1 "$URLFILE" 2>/dev/null)"
   [ -n "$url" ] || url="http://$1:$INTERNAL_PORT/"
-  printf '{"url":"%s","host":"%s","port":%s,"since":%s}\n' \
-    "$url" "$1" "$INTERNAL_PORT" "$(now)" >"$STATEFILE"
+  tok="$(printf '%s' "$url" | sed -nE 's/.*[?&]token=([A-Za-z0-9_-]+).*/\1/p')"
+  printf '{"url":"%s","token":"%s","host":"%s","port":%s,"since":%s}\n' \
+    "$url" "$tok" "$1" "$INTERNAL_PORT" "$(now)" >"$STATEFILE"
   chmod 600 "$STATEFILE" 2>/dev/null
 }
 
@@ -461,7 +471,7 @@ do_start() {
   local workdir
   workdir="$(resolve_workspace)"
   cd "$workdir" 2>/dev/null || cd "$PKGVAR" || die "无法进入工作目录"
-  log "start: cwd=$workdir node=$NODE_BIN bind=$bind dsh_port=$dsh_port home=$DSH_HOME"
+  log "start: cwd=$workdir node=$NODE_BIN bind=$bind dsh_port=$dsh_port home=$DSH_HOME entry=${DSH_ENTRY:-auto}"
 
   local entry
   local -a cmd

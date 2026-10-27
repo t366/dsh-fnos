@@ -299,6 +299,12 @@ sec "7. 入口、令牌与配对"
 if [ "$HAS_DSH" = "yes" ]; then
   if [ -f "$ROOT/var/launcher.json" ]; then
     ok "跳转器 state 就位" "$(sed -E 's/(token=)[A-Za-z0-9_-]+/\1***/g' "$ROOT/var/launcher.json" 2>/dev/null)"
+    STOK="$(sed -nE 's/.*"token":"([^"]*)".*/\1/p' "$ROOT/var/launcher.json" 2>/dev/null)"
+    if [ -n "$STOK" ] && [ "$STOK" = "$(sed -nE 's/.*token=([A-Za-z0-9_-]+).*/\1/p' "$ROOT/var/dsh-url.txt" 2>/dev/null | head -n1)" ]; then
+      ok "state 里的令牌与 dsh-url.txt 一致" "点图标即进靠的就是它"
+    else
+      warn "state 里的令牌缺失或与 dsh-url.txt 不一致" "自动进入会退化成配对页"
+    fi
   else
     warn "缺少 var/launcher.json" "跳转器会一直显示等待页；只在 dsh 模式下才应该存在"
   fi
@@ -321,25 +327,63 @@ else
   echo "  （stub 模式没有启动令牌，不生成 dsh-url.txt，属预期）"
 fi
 
-# 端到端验证配对：正确令牌应 302 且下发 cookie，垃圾令牌应 401。
-# 只发请求，不改任何文件。
-if [ "$HAS_DSH" = "yes" ] && [ -n "${BINDIP:-}" ] && [ -s "$ROOT/var/dsh-url.txt" ]; then
+# 端到端验证入口：这才是用户点图标时真正走的那条路。
+#
+# auto 模式：GET service_port 应该直接 302 到「绑定 IP + 内部端口 + 本次令牌」，
+#           把这条地址再请求一次必须不是 401 —— 401 就是「点了图标进不去」。
+# pair 模式：没有 cookie 时给配对页；POST 正确令牌应 302 + dsh_gate。
+if [ "$HAS_DSH" = "yes" ] && [ -n "${BINDIP:-}" ]; then
   TOK="$(sed -nE 's/.*token=([A-Za-z0-9_-]+).*/\1/p' "$ROOT/var/dsh-url.txt" 2>/dev/null | head -n1)"
-  HDR="$(curl -s -m 8 -o /dev/null -D - -X POST --data-urlencode "token=$TOK" "http://$BINDIP:$RPORT/pair" 2>/dev/null)"
-  PCODE="$(printf '%s' "$HDR" | sed -nE 's#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' | head -n1)"
-  if [ "$PCODE" = "302" ] && printf '%s' "$HDR" | grep -qi 'set-cookie: *dsh_gate='; then
-    ok "配对流程可用（HTTP 302 + dsh_gate cookie）" "新设备粘一次令牌即可进入"
-  else
-    bad "配对流程异常（HTTP ${PCODE:-无响应}）" "检查跳转器日志；cookie 头是否下发也一并确认"
-  fi
-
-  HDR2="$(curl -s -m 8 -o /dev/null -D - -X POST --data 'token=deadbeefdeadbeefdeadbeef' "http://$BINDIP:$RPORT/pair" 2>/dev/null)"
-  PCODE2="$(printf '%s' "$HDR2" | sed -nE 's#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' | head -n1)"
-  case "$PCODE2" in
-    401) ok "错误令牌被拒绝（HTTP 401）" "限速与校验都生效" ;;
-    429) ok "错误令牌触发限速（HTTP 429）" "验证了限速分支" ;;
-    *)   warn "错误令牌没有按预期被拒（HTTP ${PCODE2:-无响应}）" "预期 401" ;;
+  HJ="$(curl -s -m 6 "http://$BINDIP:$RPORT/healthz" 2>/dev/null)"
+  EMODE=unknown
+  case "$HJ" in
+    *'"mode":"auto"'*) EMODE=auto ;;
+    *'"mode":"pair"'*) EMODE=pair ;;
   esac
+  ok "入口模式：$EMODE"
+
+  HDR="$(curl -s -m 8 -o /dev/null -D - "http://$BINDIP:$RPORT/" 2>/dev/null)"
+  ECODE="$(printf '%s' "$HDR" | sed -nE 's#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' | head -n1)"
+  LOC="$(printf '%s' "$HDR" | sed -nE 's/^[Ll]ocation: *(.*[^ ]) *\r?$/\1/p' | head -n1)"
+
+  if [ "$EMODE" = "auto" ]; then
+    if [ "$ECODE" = "302" ]; then
+      ok "点图标直接跳转（HTTP 302）" "$(printf '%s' "$LOC" | sed -E 's/(token=)[A-Za-z0-9_-]+/\1***/')"
+    else
+      bad "点图标没有直接跳转（HTTP ${ECODE:-无响应}）" "期望 302；出现在这里说明自动取令牌失败"
+    fi
+    case "$LOC" in
+      *"token=$TOK"*) ok "跳转地址带本次启动的令牌" "令牌与 dsh-url.txt 一致" ;;
+      *token=*)       bad "跳转地址里的令牌与 dsh-url.txt 不一致" "可能是上一轮遗留的 state" ;;
+      *)              warn "跳转地址里没有令牌" "检查 launcher.json 的 token 字段" ;;
+    esac
+    FCODE="$(curl -s -m 8 -o /dev/null -w '%{http_code}' "$LOC" 2>/dev/null)"
+    case "$FCODE" in
+      2*|3*) ok "跟随跳转后能进 dsh（HTTP $FCODE）" "这条链路就是用户点图标后看到的" ;;
+      401|403) bad "跟随跳转后被 dsh 拒绝（HTTP $FCODE）" "令牌无效：重启后 state 没刷新？" ;;
+      *)     warn "跟随跳转结果异常（HTTP ${FCODE:-无响应}）" "手工在浏览器打开一次确认" ;;
+    esac
+  else
+    if [ "$ECODE" = "200" ]; then
+      ok "未配对的访客看到配对页" "pair 模式，符合预期"
+    else
+      warn "pair 模式下首页返回 HTTP ${ECODE:-无响应}" "预期 200 配对页"
+    fi
+    PHDR="$(curl -s -m 8 -o /dev/null -D - -X POST --data-urlencode "token=$TOK" "http://$BINDIP:$RPORT/pair" 2>/dev/null)"
+    PCODE="$(printf '%s' "$PHDR" | sed -nE 's#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' | head -n1)"
+    if [ "$PCODE" = "302" ] && printf '%s' "$PHDR" | grep -qi 'set-cookie: *dsh_gate='; then
+      ok "配对流程可用（HTTP 302 + dsh_gate cookie）" "新设备粘一次令牌即可进入"
+    else
+      bad "配对流程异常（HTTP ${PCODE:-无响应}）" "检查跳转器日志；cookie 头是否下发也一并确认"
+    fi
+    PHDR2="$(curl -s -m 8 -o /dev/null -D - -X POST --data 'token=deadbeefdeadbeefdeadbeef' "http://$BINDIP:$RPORT/pair" 2>/dev/null)"
+    PCODE2="$(printf '%s' "$PHDR2" | sed -nE 's#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' | head -n1)"
+    case "$PCODE2" in
+      401) ok "错误令牌被拒绝（HTTP 401）" "限速与校验都生效" ;;
+      429) ok "错误令牌触发限速（HTTP 429）" "验证了限速分支" ;;
+      *)   warn "错误令牌没有按预期被拒（HTTP ${PCODE2:-无响应}）" "预期 401" ;;
+    esac
+  fi
 fi
 
 if [ -f "$ROOT/var/info.log" ]; then

@@ -120,14 +120,25 @@ PORT="${dsh_port:-3080}"
 case "$PORT" in ''|*[!0-9]*) PORT=3080 ;; esac
 [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || PORT=3080
 
+# 入口方式：auto = 点图标直接进（默认）；pair = 新设备粘贴一次令牌。
+# 重装时向导不填就沿用旧值，避免一次「修复安装」把用户的偏好改回去。
+OLD_ENTRY="$(get_conf DSH_ENTRY || true)"
+ENTRY="${dsh_entry:-}"
+case "$ENTRY" in
+  "")        ENTRY="${OLD_ENTRY:-auto}" ;;
+  pair|PAIR) ENTRY="pair" ;;
+  *)         ENTRY="auto" ;;
+esac
+
 umask 077
 {
   printf 'DSH_PORT=%s\n' "$PORT"
   printf 'DSH_BIND=%s\n' "$BIND"
   printf 'DSH_API_KEY=%s\n' "$NEW_KEY"
+  printf 'DSH_ENTRY=%s\n' "$ENTRY"
 } >"$SETTINGS" || fail "无法写入配置文件 $SETTINGS"
 chmod 600 "$SETTINGS" 2>/dev/null
-log "settings: port=$PORT bind=$BIND key=$([ -n "$NEW_KEY" ] && echo set || echo empty)"
+log "settings: port=$PORT bind=$BIND key=$([ -n "$NEW_KEY" ] && echo set || echo empty) entry=$ENTRY"
 
 # ---- 副本：让配置能跨卸载存活 ----
 if [ -n "$MIRROR" ]; then

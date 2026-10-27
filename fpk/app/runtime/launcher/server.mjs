@@ -6,17 +6,24 @@
 // 「固定 token」的开关。于是把 service_port（图标打开的那个端口）交给这个
 // 小服务，dsh 退到内部端口。跳转器负责把浏览器送到带令牌的地址。
 //
-// 安全模型（B 方案：设备白名单）：
-//   - 没有任何 cookie 的访客只能看到「粘贴入口令牌」页面；
-//   - 粘贴的令牌不比对、不解析，直接拿去请求 dsh，回 3xx 即视为有效
-//     （这样 dsh 改令牌格式也不会影响本文件）；
-//   - 通过后签一个 180 天的 HttpOnly cookie，之后点图标直接进；
-//   - 失败按 IP 限速，防止在局域网上暴力猜令牌。
+// 两种入口模式（--auth）：
+//
+//   auto（默认）—— 点图标直接进。跳转器从 state 文件读本次启动的令牌
+//     （cmd/main 启动 dsh 后从日志抓到并写入，600 权限、同用户可读），
+//     拼成 http://<绑定IP>:<内部端口>/?token=… 后 302。
+//     只对私有网段（10/8、172.16/12、192.168/16、100.64/10、fc00::/7、
+//     ::1）放行；来自公网地址的请求仍然要求配对，避免把 NAS 映射到公网后
+//     整个 dsh 变成"无密码可执行终端"。
+//
+//   pair —— 老行为。没有 dsh_gate cookie 的访客只能看到「粘贴入口令牌」页，
+//     粘贴的令牌不比对、不解析，直接拿去请求 dsh，回 3xx 即视为有效。
+//     通过后签 180 天 HttpOnly cookie，失败按 IP 限速。
 //
 // 不做的事：不代理任何业务流量（只回 302）。代理就要改写 Host，
 // 会破坏 dsh 的 Host/Origin 栅栏，那是另一个量级的问题。
 //
 // 参数：--host <bind ip> --port <listen port> --state <launcher.json>
+//       [--auth auto|pair]
 // ============================================================================
 
 import http from 'node:http';
@@ -33,11 +40,14 @@ const opt = (k, d) => {
 const HOST = opt('--host', '127.0.0.1');
 const PORT = Number(opt('--port', '3080'));
 const STATE_FILE = opt('--state', '');
+const AUTH = String(opt('--auth', 'auto') || 'auto').toLowerCase() === 'pair' ? 'pair' : 'auto';
 
 const COOKIE = 'dsh_gate';
 const COOKIE_MAX_AGE = 180 * 24 * 3600;
 const FAIL_LIMIT = 5;
 const FAIL_WINDOW_MS = 10 * 60 * 1000;
+// state 写入后 60 秒内还读不到令牌，按「这一轮确实没抓到」处理，不再无限转圈
+const TOKEN_GRACE_MS = 60 * 1000;
 
 function log(msg) {
   const d = new Date();
@@ -49,8 +59,8 @@ function log(msg) {
 }
 
 // ---------------------------------------------------------------- 密钥
-// 存 state 同目录（$PKGVAR = @appdata），重装会没，但那不影响安全性，
-// 只意味着已配对的设备需要重新粘贴一次。
+// pair 模式用。存 state 同目录（$PKGVAR = @appdata），重装会没，但那不影响
+// 安全性，只意味着已配对的设备需要重新粘贴一次。
 const SECRET_FILE = STATE_FILE ? path.join(path.dirname(STATE_FILE), 'launcher-secret') : '';
 let SECRET = null;
 
@@ -84,11 +94,49 @@ function safeEq(a, b) {
 function readState() {
   try {
     const st = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-    if (!st || typeof st.url !== 'string' || typeof st.host !== 'string' || !st.port) return null;
+    if (!st || typeof st.host !== 'string' || !st.port) return null;
+    if (typeof st.url !== 'string' && typeof st.token !== 'string') return null;
     return st;
   } catch {
     return null;
   }
+}
+
+// 把「本次启动的令牌」拼成对外的入口地址。
+// 不能直接用 state.url：那是 dsh 自己打印的，主机名可能是 127.0.0.1 或
+// localhost，照抄会把浏览器送到用户自己的电脑上。
+function targetUrl(st) {
+  let tok = typeof st.token === 'string' ? st.token.trim() : '';
+  if (!tok) {
+    const m = /[?&]token=([A-Za-z0-9_-]+)/.exec(String(st.url || ''));
+    if (m) tok = m[1];
+  }
+  if (!tok) return '';
+
+  let pathPart = `/?token=${encodeURIComponent(tok)}`;
+  try {
+    const u = new URL(st.url);
+    if (u.searchParams.get('token')) pathPart = u.pathname + u.search;
+  } catch {}
+  return `http://${st.host}:${st.port}${pathPart}`;
+}
+
+// ---------------------------------------------------------------- 来源判定
+// auto 模式只对「家里/公司内网」放行。判断不了的一律当成不可信 —— 宁可让
+// 用户看到配对页，也不要因为一条 ::ffff: 之类的前缀没处理就把入口敞开。
+function isPrivate(ip) {
+  let s = String(ip || '').trim().toLowerCase().replace(/^::ffff:/, '');
+  if (!s) return false;
+  if (s === '::1' || s === 'localhost') return true;
+  if (s.startsWith('127.')) return true;
+  if (s.startsWith('10.')) return true;
+  if (s.startsWith('192.168.')) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(s)) return true;
+  if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(s)) return true; // CGNAT / Tailscale
+  if (s.startsWith('169.254.')) return true;
+  if (s.startsWith('fe80:')) return true;
+  if (/^f[cd][0-9a-f]{2}:/.test(s)) return true; // IPv6 ULA fc00::/7
+  return false;
 }
 
 // ---------------------------------------------------------------- cookie
@@ -208,10 +256,10 @@ const waitPage = () => page(
    <script>setTimeout(()=>location.reload(),2000)</script>`
 );
 
-const pairPage = (err) => page(
+const pairPage = (err, note) => page(
   'DeepSeek Harness — 配对这台设备',
   `<h1>配对这台设备</h1>
-   <p>这是第一次从该设备打开。粘贴一次入口令牌，之后点图标即可直接进入。</p>
+   <p>${note || '粘贴一次入口令牌，之后点图标即可直接进入。'}</p>
    <form method="post" action="/pair">
      <input name="token" placeholder="粘贴完整地址或 token" autocomplete="off" spellcheck="false" autofocus>
      <button type="submit">配对并进入</button>
@@ -221,7 +269,7 @@ const pairPage = (err) => page(
      <b>入口令牌在哪：</b><br>
      NAS 上执行 <code>cat /var/apps/dsh/var/dsh-url.txt</code>，
      或用应用中心的「日志」查看带 <code>token=</code> 的那行。<br>
-     令牌与 cookie 有效期不同：令牌每次启动都会变，配对一次后可长期使用。
+     令牌每次启动都会变，配对一次后 180 天内不必再填。
    </div>`
 );
 
@@ -240,14 +288,20 @@ function readBody(req, limit = 8192) {
   });
 }
 
+const redirect = (res, location, extra) => {
+  res.writeHead(302, { location, 'cache-control': 'no-store', ...(extra || {}) });
+  res.end();
+};
+
 const server = http.createServer(async (req, res) => {
   const ip = req.socket.remoteAddress || '?';
   const url = new URL(req.url || '/', `http://${req.headers.host || HOST}`);
 
   if (url.pathname === '/healthz') {
     const st = readState();
+    const target = st ? targetUrl(st) : '';
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-    res.end(JSON.stringify({ ok: true, ready: !!st }));
+    res.end(JSON.stringify({ ok: true, ready: !!st, auto: AUTH === 'auto' && !!target, mode: AUTH }));
     return;
   }
   if (url.pathname === '/favicon.ico') {
@@ -278,8 +332,9 @@ const server = http.createServer(async (req, res) => {
     const code = await probeToken(st, token);
     if (code >= 300 && code < 400) {
       log(`pair: ok ip=${ip} (dsh ${code})`);
-      res.writeHead(302, { location: st.url, 'set-cookie': newGateCookie(), 'cache-control': 'no-store' });
-      res.end();
+      redirect(res, `http://${st.host}:${st.port}/?token=${encodeURIComponent(token)}`, {
+        'set-cookie': newGateCookie(),
+      });
       return;
     }
     noteFail(ip);
@@ -289,16 +344,50 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 其余一律走「已配对 → 跳转」
   const st = readState();
   if (!st) {
     res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'retry-after': '2' });
     res.end(waitPage());
     return;
   }
-  if (gateOk(req)) {
-    res.writeHead(302, { location: st.url, 'cache-control': 'no-store' });
-    res.end();
+
+  const target = targetUrl(st);
+
+  // ---- auto：点图标直接进 ----
+  if (AUTH === 'auto') {
+    if (!isPrivate(ip)) {
+      // 公网来源一律要求配对，哪怕我们用 auto 模式
+      log(`auto: non-private ip=${ip} -> pair`);
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(pairPage('', '当前访问来自非内网地址，需要先配对一次。'));
+      return;
+    }
+    if (target) {
+      log(`auto: redirect ip=${ip}`);
+      redirect(res, target);
+      return;
+    }
+    const since = Number(st.since) || 0;
+    const fresh = since && Date.now() - since * 1000 < TOKEN_GRACE_MS;
+    if (fresh) {
+      res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'retry-after': '2' });
+      res.end(waitPage());
+      return;
+    }
+    // 这一轮确实没抓到令牌（dsh 改了输出格式 / 启动失败），别让用户对着
+    // 永远刷新的白屏，直接告诉他可以手工粘贴一次。
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    res.end(pairPage(
+      '自动获取入口令牌失败。这通常是 dsh 没有正常启动，或改用了新的日志格式。',
+      '可以粘贴一次令牌进入，或先到应用中心看日志。'
+    ));
+    return;
+  }
+
+  // ---- pair：老行为 ----
+  if (gateOk(req) && target) {
+    log(`pair: pass ip=${ip}`);
+    redirect(res, target);
     return;
   }
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
@@ -313,7 +402,7 @@ server.on('error', (e) => {
 });
 
 server.listen(PORT, HOST, () => {
-  log(`listening on http://${HOST}:${PORT} (state=${STATE_FILE || 'none'})`);
+  log(`listening on http://${HOST}:${PORT} (auth=${AUTH} state=${STATE_FILE || 'none'})`);
 });
 
 for (const sig of ['SIGTERM', 'SIGINT']) {

@@ -5,6 +5,10 @@
 #   bash build.sh              # 骨架包（不含 dsh 运行时，约 100KB）
 #   bash build.sh full         # 完整包（捆绑 node + dsh，约 990MB）
 #
+# 默认行为（都是为了少记命令）：
+#   · 先跑 selftest.sh，失败就中止          → DSH_SKIP_SELFTEST=1 跳过
+#   · 打完把 fpk 复制到应用共享目录，供前端「手动安装」选取 → DSH_STAGE=0 跳过
+#
 # 为什么必须在 NAS 上跑：
 #   - fnpack 只装在那台机器上（/usr/local/bin/fnpack）
 #   - cmd/* 需要可执行位，Windows 上 scp 过去会丢
@@ -47,6 +51,18 @@ chmod +x cmd/* 2>/dev/null || true
 find . -maxdepth 3 -type d -not -path './app/runtime/app/*' -exec chmod 755 {} + 2>/dev/null || true
 say "cmd/ 已 chmod +x，目录已 chmod 755，自写文本已清 CRLF（node_modules 不动）"
 
+# ---------------------------------------------------------------- 1.2 自测
+# 把 selftest 串进打包流程：用户在 NAS 上只需要记一条 `bash build.sh full`，
+# 而不是「先 selftest 再 build」。自测失败直接中止 —— 打一个起不来的包更浪费时间。
+if [ "${DSH_SKIP_SELFTEST:-0}" = "1" ]; then
+  say "已按 DSH_SKIP_SELFTEST=1 跳过自测"
+elif [ -f selftest.sh ]; then
+  step "安装前自测（失败会中止打包）"
+  if ! bash selftest.sh; then
+    die "自测未通过，已中止打包。修完再跑；确认与本次改动无关可 DSH_SKIP_SELFTEST=1 跳过。"
+  fi
+fi
+
 # ---------------------------------------------------------------- 1.5 版本守卫
 # 踩过的坑（2026-10-27）：版本号没变时 `appcenter-cli install-fpk` 只打印
 # 「Application [dsh] is installed.」就返回 0，**既不替换 target/，也不跑升级钩子**，
@@ -75,9 +91,9 @@ INST_VER=""
 say "包：$PKG_APP $PKG_VER    已安装：${INST_VER:-<无>}"
 if [ -n "$INST_VER" ] && [ "$PKG_VER" = "$INST_VER" ]; then
   say ""
-  say "⚠ 版本号与已安装的相同。install-fpk 只会回一句「is installed」然后什么都不做："
-  say "   target/ 不更新、upgrade_init/callback 不执行。"
-  say "   要真的覆盖安装，先把 manifest 的 version 改成更高值（例如 $PKG_VER → 下一版）。"
+  say "⚠ 版本号与已安装的相同。侧载包没有「覆盖升级」通道："
+  say "   版本不变时应用中心认为还是同一个包，装上去 target/ 不会更新。"
+  say "   打包前请把 manifest 的 version 改成更高值（例如 $PKG_VER → 下一版）。"
   say ""
 fi
 
@@ -281,10 +297,39 @@ FPK="$(ls -1t ./*.fpk 2>/dev/null | head -n1 || true)"
 [ -n "$FPK" ] || die "fnpack 没有产出 fpk"
 say ""
 say "产物：$FPK（$(du -h "$FPK" 2>/dev/null | awk '{print $1}')，版本 $PKG_VER）"
+
+# ---------------------------------------------------------------- 7. 送到共享目录
+# 前端「手动安装」只能选本地文件，而包是在 NAS 上打出来的。复制到应用共享目录，
+# 在电脑的文件管理里点一下就拿到了，省掉 scp / appcenter-cli 这些命令行步骤。
+# 不想占这份空间就 DSH_STAGE=0 bash build.sh。
+step "就绪（前端安装用）"
+if [ "${DSH_STAGE:-1}" = "0" ]; then
+  say "已按 DSH_STAGE=0 跳过复制；包留在 $HERE/$FPK"
+else
+  SHARE=""
+  for p in "/var/apps/$PKG_APP/shares/workspace" "/var/apps/$PKG_APP/share/workspace" \
+           "$HERE/shares/workspace"; do
+    [ -d "$p" ] && { SHARE="$p"; break; }
+  done
+  if [ -z "$SHARE" ]; then
+    say "没找到共享目录（应用还没装？），包留在 $HERE/$FPK"
+  else
+    if cp -f "$FPK" "$SHARE/$FPK" 2>/dev/null; then
+      chmod 644 "$SHARE/$FPK" 2>/dev/null || true
+      say "已放到共享目录：$SHARE/$FPK"
+      say "电脑上：飞牛 → 文件管理 → 共享目录「dsh / workspace」→ 下载 $(basename "$FPK")"
+    else
+      say "⚠ 复制到共享目录失败（权限或空间），包留在 $HERE/$FPK"
+    fi
+  fi
+fi
+
 say ""
-say "安装："
-say "  appcenter-cli install-fpk '$FPK'"
+say "安装 / 升级（全部在飞牛界面里完成，无需命令行）："
+say "  1) 应用中心 → dsh → 卸载，数据选「保留会话、凭据与设置」"
+say "  2) 应用中心 → 手动安装 → 选择刚下载的 $(basename "$FPK") → 安装"
+say "     （向导里 API Key 留空即沿用旧值，入口方式默认「点图标直接进入」）"
+say ""
 if [ -n "$INST_VER" ] && [ "$PKG_VER" = "$INST_VER" ]; then
-  say ""
-  say "注意：版本与已安装的相同，上面的安装命令会被静默跳过（只回一句 is installed）。"
+  say "注意：版本与已安装的相同，应用中心会把它当成同一个包。打包前请把 manifest 的 version 提上去。"
 fi

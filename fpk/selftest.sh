@@ -286,6 +286,9 @@ if [ "$LINUX" = "yes" ]; then
     "$(sed -nE 's/.*"host":"([^"]*)".*/\1/p' "$ROOT/var/launcher.json" 2>/dev/null)"
   check "state 里的端口是内部端口" "$DPORT" \
     "$(sed -nE 's/.*"port":([0-9]+).*/\1/p' "$ROOT/var/launcher.json" 2>/dev/null)"
+  # 跳转器不再需要人粘令牌，全靠这个字段
+  check "state 里带 token" "faketoken_1234567890" \
+    "$(sed -nE 's/.*"token":"([^"]*)".*/\1/p' "$ROOT/var/launcher.json" 2>/dev/null)"
 
   # 幂等：重复 start 不该重启 dsh（会打断会话），也不该换 token
   UTOK1="$(cat "$ROOT/var/dsh-url.txt" 2>/dev/null)"
@@ -305,18 +308,18 @@ if [ "$LINUX" = "yes" ]; then
     "$(grep -q 'faketoken_1234567890' "$ROOT/var/dsh-url.txt" 2>/dev/null && echo yes || echo no)"
   lc "$HERE/cmd/main" stop >/dev/null 2>&1
 else
-  SKIP=$((SKIP + 12))
+  SKIP=$((SKIP + 13))
   printf '  \033[33mSKIP\033[0m  dsh 模式进程编排（Windows 上 stop 杀不掉原生进程，会串到下一段）\n'
 fi
 rm -rf "$ROOT/target/runtime/app"
 
-step "入口跳转器（配对流程，跨平台）"
+step "入口跳转器（自动进入 + 配对，跨平台）"
 # 这一段不依赖 main：直接起一个假的 dsh 上游 + 跳转器，验证 HTTP 行为。
-# 之所以要单独测：配对是用户唯一的进门动作，错了就是「装好了但进不去」，
+# 之所以要单独测：入口是用户唯一的进门动作，错了就是「装好了但进不去」，
 # 而且这类错在真机上只能靠人去点，代价很高。
 NODE_FOR_TEST="${DSH_TEST_NODE:-$(command -v node 2>/dev/null || true)}"
 if [ -z "${NODE_FOR_TEST:-}" ]; then
-  SKIP=$((SKIP + 8))
+  SKIP=$((SKIP + 11))
   printf '  \033[33mSKIP\033[0m  入口跳转器（没有 node 可用于起测试进程）\n'
 else
   G="$ROOT/gate"
@@ -355,61 +358,101 @@ http.createServer((req, res) => {
 }).listen(port, '127.0.0.1', () => console.log('up ready'));
 JS
 
-    printf '{"url":"http://127.0.0.1:%s/?token=%s","host":"127.0.0.1","port":%s,"since":%s}\n' \
-      "$UP" "$TOK" "$UP" "$(date +%s)" >"$G/launcher.json"
+    # 故意把 url 的主机名写成 localhost:9999：真实的 dsh 会打印它自己监听的回环
+    # 地址，跳转器必须用「绑定 IP + 内部端口」重建，照抄就把浏览器送到用户自己的
+    # 电脑上。这一段就是在验证那件事。
+    mkstate() { # $1=token $2=since
+      printf '{"url":"http://localhost:9999/?token=%s","token":"%s","host":"127.0.0.1","port":%s,"since":%s}\n' \
+        "$1" "$1" "$UP" "${2:-$(date +%s)}" >"$G/launcher.json"
+    }
+    mkstate "$TOK"
 
     "$NODE_FOR_TEST" "$G/up.cjs" --port "$UP" --token "$TOK" >"$G/up.log" 2>&1 &
     UP_PID=$!
-    "$NODE_FOR_TEST" "$HERE/app/runtime/launcher/server.mjs" \
-      --host 127.0.0.1 --port "$GP" --state "$G/launcher.json" >"$G/gate.log" 2>&1 &
-    G_PID=$!
 
-    i=0
-    while [ "$i" -lt 40 ]; do
-      if curl -s -m 1 -o /dev/null "http://127.0.0.1:$GP/healthz" 2>/dev/null; then break; fi
-      sleep 0.25
-      i=$((i + 1))
-    done
-
-    if ! curl -s -m 2 -o /dev/null "http://127.0.0.1:$GP/healthz" 2>/dev/null; then
-      check "跳转器可启动" "yes" "no（看 $G/gate.log）"
-      SKIP=$((SKIP + 7))
-    else
-      check "跳转器 /healthz 正常" "yes" \
-        "$(curl -s -m 3 "http://127.0.0.1:$GP/healthz" 2>/dev/null | grep -q '"ok":true' && echo yes || echo no)"
-
-      BODY="$(curl -s -m 3 "http://127.0.0.1:$GP/" 2>/dev/null)"
-      check "未配对访客看到配对页" "yes" \
-        "$(printf '%s' "$BODY" | grep -q '配对这台设备' && echo yes || echo no)"
-      check "配对页不泄露令牌" "yes" \
-        "$(printf '%s' "$BODY" | grep -q "$TOK" && echo no || echo yes)"
-
-      HDR="$(curl -s -m 5 -o /dev/null -D - -X POST --data-urlencode "token=$TOK" \
-             "http://127.0.0.1:$GP/pair" 2>/dev/null)"
-      PCODE="$(printf '%s' "$HDR" | sed -nE 's#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' | head -n1)"
-      CK="$(printf '%s' "$HDR" | sed -nE 's/^[Ss]et-[Cc]ookie: *(dsh_gate=[^;]+).*/\1/p' | head -n1)"
-      check "正确令牌 → 302" "302" "${PCODE:-无}"
-      check "正确令牌下发 dsh_gate cookie" "yes" "$([ -n "$CK" ] && echo yes || echo no)"
-
-      LHDR="$(curl -s -m 5 -o /dev/null -D - -H "Cookie: $CK" "http://127.0.0.1:$GP/" 2>/dev/null)"
-      LCODE="$(printf '%s' "$LHDR" | sed -nE 's#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' | head -n1)"
-      LOC="$(printf '%s' "$LHDR" | sed -nE 's/^[Ll]ocation: *(.*[^ ]) *\r?$/\1/p' | head -n1)"
-      check "已配对 → 302" "302" "${LCODE:-无}"
-      check "跳转目标带当前令牌" "yes" \
-        "$(printf '%s' "$LOC" | grep -q "token=$TOK" && echo yes || echo no)"
-
-      FCODE="$(curl -s -m 5 -o /dev/null -w '%{http_code}' \
-               -H "Cookie: dsh_gate=abcdef0123456789.9999999999.deadbeef" \
-               "http://127.0.0.1:$GP/" 2>/dev/null)"
-      check "伪造 cookie 不算配对" "200" "${FCODE:-无}"
-
-      # 限速：连续错误到阈值，最后一发应为 429
-      for _ in 1 2 3 4 5; do
-        curl -s -m 3 -o /dev/null -X POST --data 'token=deadbeefdeadbeef' "http://127.0.0.1:$GP/pair" 2>/dev/null
+    start_gate() { # $1=auth
+      "$NODE_FOR_TEST" "$HERE/app/runtime/launcher/server.mjs" \
+        --host 127.0.0.1 --port "$GP" --state "$G/launcher.json" --auth "$1" >"$G/gate.log" 2>&1 &
+      G_PID=$!
+      i=0
+      while [ "$i" -lt 40 ]; do
+        if curl -s -m 1 -o /dev/null "http://127.0.0.1:$GP/healthz" 2>/dev/null; then return 0; fi
+        sleep 0.25
+        i=$((i + 1))
       done
-      RLCODE="$(curl -s -m 3 -o /dev/null -w '%{http_code}' -X POST --data 'token=deadbeefdeadbeef' \
-                "http://127.0.0.1:$GP/pair" 2>/dev/null)"
-      check "连续错误触发限速" "429" "${RLCODE:-无}"
+      return 1
+    }
+
+    stop_gate() {
+      [ -n "${G_PID:-}" ] && kill "$G_PID" 2>/dev/null
+      sleep 0.3
+    }
+
+    hdr() { curl -s -m 5 -o /dev/null -D - "$@" 2>/dev/null; }
+    hcode() { printf '%s' "$1" | sed -nE 's#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' | head -n1; }
+    hloc() { printf '%s' "$1" | sed -nE 's/^[Ll]ocation: *(.*[^ ]) *\r?$/\1/p' | head -n1; }
+
+    if ! start_gate auto; then
+      check "跳转器可启动（auto）" "yes" "no（看 $G/gate.log）"
+      SKIP=$((SKIP + 11))
+    else
+      # ---- auto：点图标直接进（这是用户唯一想做的事）----
+      H="$(hdr "http://127.0.0.1:$GP/")"
+      LOC="$(hloc "$H")"
+      check "auto：点图标直接 302" "302" "$(hcode "$H")"
+      check "auto：跳转地址带本次令牌" "yes" \
+        "$(printf '%s' "$LOC" | grep -q "token=$TOK" && echo yes || echo no)"
+      check "auto：用绑定地址重建，不照抄日志里的 localhost" "yes" \
+        "$(printf '%s' "$LOC" | grep -q "http://127.0.0.1:$UP/" && echo yes || echo no)"
+      # 令牌拿去请求上游必须是 303（假 dsh 认得它）。这条能抓住 Location 拼错、
+      # 端口写错、token 截断之类「看着像 302 但点了进不去」的问题。
+      check "auto：上游接受这条令牌（303）" "303" \
+        "$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$LOC" 2>/dev/null)"
+      check "auto：/healthz 自报 auto" "yes" \
+        "$(curl -s -m 3 "http://127.0.0.1:$GP/healthz" 2>/dev/null | grep -q '"auto":true' && echo yes || echo no)"
+      stop_gate
+
+      # 抓不到令牌时不能把人送到 dsh 的 401 页，要给一个能看懂的说明页
+      mkstate "" 0
+      if start_gate auto; then
+        check "auto：无令牌给说明页而非 302" "200" \
+          "$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$GP/" 2>/dev/null)"
+      fi
+      stop_gate
+
+      # ---- pair：老行为，留给不想让内网直接进的用户 ----
+      mkstate "$TOK"
+      if start_gate pair; then
+        BODY="$(curl -s -m 3 "http://127.0.0.1:$GP/" 2>/dev/null)"
+        check "pair：未配对访客看到配对页" "yes" \
+          "$(printf '%s' "$BODY" | grep -q '配对这台设备' && echo yes || echo no)"
+        check "pair：配对页不泄露令牌" "yes" \
+          "$(printf '%s' "$BODY" | grep -q "$TOK" && echo no || echo yes)"
+
+        PH="$(curl -s -m 5 -o /dev/null -D - -X POST --data-urlencode "token=$TOK" \
+              "http://127.0.0.1:$GP/pair" 2>/dev/null)"
+        CK="$(printf '%s' "$PH" | sed -nE 's/^[Ss]et-[Cc]ookie: *(dsh_gate=[^;]+).*/\1/p' | head -n1)"
+        check "pair：正确令牌 → 302" "302" "$(hcode "$PH")"
+        check "pair：下发 dsh_gate cookie" "yes" "$([ -n "$CK" ] && echo yes || echo no)"
+
+        LH="$(curl -s -m 5 -o /dev/null -D - -H "Cookie: $CK" "http://127.0.0.1:$GP/" 2>/dev/null)"
+        check "pair：已配对 → 302" "302" "$(hcode "$LH")"
+        check "pair：跳转目标带当前令牌" "yes" \
+          "$(printf '%s' "$(hloc "$LH")" | grep -q "token=$TOK" && echo yes || echo no)"
+
+        check "pair：伪造 cookie 不算配对" "200" \
+          "$(curl -s -m 5 -o /dev/null -w '%{http_code}' \
+             -H "Cookie: dsh_gate=abcdef0123456789.9999999999.deadbeef" \
+             "http://127.0.0.1:$GP/" 2>/dev/null)"
+
+        for _ in 1 2 3 4 5; do
+          curl -s -m 3 -o /dev/null -X POST --data 'token=deadbeefdeadbeef' "http://127.0.0.1:$GP/pair" 2>/dev/null
+        done
+        check "pair：连续错误触发限速" "429" \
+          "$(curl -s -m 3 -o /dev/null -w '%{http_code}' -X POST --data 'token=deadbeefdeadbeef' \
+             "http://127.0.0.1:$GP/pair" 2>/dev/null)"
+      fi
+      stop_gate
     fi
 
     kill "$G_PID" "$UP_PID" 2>/dev/null

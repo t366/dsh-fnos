@@ -4,7 +4,7 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "修改后会重启应用。端口固定为 3080，如需更换请先卸载后重新安装。"
+        "helpText": "保存后会重启应用（约几秒）。端口固定为 3080，如需更换请先卸载后重新安装。"
       },
       {
         "type": "password",
@@ -15,8 +15,19 @@
       {
         "type": "text",
         "field": "dsh_bind",
-        "label": "监听地址（留空或填 auto 表示自动探测）",
+        "label": "监听地址（留空表示保持不变，填 auto 重新自动探测）",
         "initValue": ""
+      },
+      {
+        "type": "radio",
+        "field": "dsh_entry",
+        "label": "入口方式",
+        "initValue": "keep",
+        "options": [
+          { "label": "保持不变", "value": "keep" },
+          { "label": "点图标直接进入", "value": "auto" },
+          { "label": "新设备需粘贴一次令牌", "value": "pair" }
+        ]
       }
     ]
   }

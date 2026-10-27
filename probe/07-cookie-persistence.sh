@@ -1,18 +1,20 @@
 #!/bin/bash
 # ============================================================================
-# 07-cookie-persistence.sh — 令牌换来的 cookie 能不能活过一次重启
+# 07-entry-after-restart.sh — 重启之后，点图标还能不能直接进去
 #
-# 为什么值得单独测：
-#   dsh 每次启动 mint 新 token，令牌只能换一次 30 天 cookie。
-#   如果 cookie 的签名密钥存在 $DSH_HOME（持久），那用户每台设备只需粘一次令牌，
-#   「每次都要取令牌」就只是错觉；如果密钥是进程内的随机值，每次重启都得重新取，
-#   那么必须加一层跳转器才能解决入口体验。
+# 这是用户最终在意的那件事：dsh 每次启动都会换令牌，入口跳转器必须跟着刷新
+# state；只要它刷新了，重启前装在手机/电脑上的快捷方式就还能一路进到底。
+#
+# 验证的东西：
+#   1) 重启前：GET service_port 得到 302 + 本次令牌，跟随可进；
+#   2) 重启后：令牌确实变了，但 GET service_port 仍然 302 + 新令牌，跟随可进；
+#   3) 顺带记录 dsh 自己的 cookie 是否跨重启存活（了解 30 天期限的真实行为）。
 #
 # 用法：
 #   bash 07-cookie-persistence.sh
 #   会重启一次 dsh（约 10 秒不可用），期间不要在浏览器里操作。
 #
-# 注意：cookie jar 里是同等于登录态的凭据，脚本结束时删除，不要外发。
+# 注意：cookie jar 里等同登录态凭据，脚本结束时删除，不要外发。
 # ============================================================================
 set -u
 
@@ -113,7 +115,7 @@ else
 fi
 
 CODE2="$(curl -s -m 10 -b "$JAR" -o /dev/null -w '%{http_code}' "$BASED/" 2>/dev/null)"
-say "  带 cookie 访问 $BASE/ → HTTP $CODE2（期望 200）"
+say "  带 cookie 访问 $BASED/ → HTTP $CODE2（期望 200）"
 [ "$CODE2" = "200" ] && ok "cookie 有效" || bad "cookie 无效（HTTP $CODE2）"
 
 # ---------------------------------------------------------------- 4. 重启
@@ -138,9 +140,13 @@ done
 ok "服务已重新监听"
 
 # ---------------------------------------------------------------- 5. 判读
-sec "5. 重启后：旧 cookie 还有效吗"
-CODE3="$(curl -s -m 10 -b "$JAR" -o /dev/null -w '%{http_code}' "$BASED/" 2>/dev/null)"
-say "  用重启前的 cookie 访问 $BASE/ → HTTP $CODE3"
+sec "5. 重启后：点图标（不带任何 cookie）还能直接进吗"
+ENTRY="http://$BINDIP:$PORT/"
+EH="$(curl -s -m 10 -o /dev/null -D - "$ENTRY" 2>/dev/null)"
+ECODE="$(printf '%s' "$EH" | sed -nE 's#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' | head -n1)"
+ELOC="$(printf '%s' "$EH" | sed -nE 's/^[Ll]ocation: *(.*[^ ]) *\r?$/\1/p' | head -n1)"
+say "  GET $ENTRY → HTTP $ECODE"
+say "  Location → $(printf '%s' "$ELOC" | sed -E 's/(token=)[A-Za-z0-9_-]+/\1***/')"
 
 URL2=""
 [ -s "$ROOT/var/dsh-url.txt" ] && URL2="$(head -n1 "$ROOT/var/dsh-url.txt")"
@@ -151,35 +157,60 @@ else
   warn "重启后没抓到新 URL，无法比较 token"
 fi
 
-if [ "$CODE3" = "200" ]; then
-  ok "cookie 跨重启存活"
-  VERDICT="persist"
+if [ "$ECODE" = "302" ] && printf '%s' "$ELOC" | grep -q "token=$TOKEN2" && [ -n "$TOKEN2" ]; then
+  ok "重启后点图标仍然直接跳转（带的是新令牌）"
+  VERDICT="auto-ok"
 else
-  bad "cookie 已失效（HTTP $CODE3）"
-  VERDICT="volatile"
+  bad "重启后点图标没有直接跳转（HTTP ${ECODE:-无响应}）"
+  VERDICT="auto-broken"
 fi
+
+FOLLOW="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$ELOC" 2>/dev/null)"
+case "$FOLLOW" in
+  2*|3*) ok "跟随跳转能进 dsh（HTTP $FOLLOW）" ;;
+  401|403) bad "新令牌被 dsh 拒绝（HTTP $FOLLOW）" ;;
+  *)     warn "跟随跳转结果异常（HTTP ${FOLLOW:-无响应}）" ;;
+esac
+
+# 用户会连续点两次图标，第二次也必须能进。这条同时回答了「令牌是不是一次性的」：
+# 若 dsh 的令牌只能用一次，第二次会拿同一个 token 却进不去 —— 那就得改成
+# 「跳转器先换 cookie 再转发给浏览器」，不能再把 token 写进 Location。
+EH2="$(curl -s -m 10 -o /dev/null -D - "$ENTRY" 2>/dev/null)"
+EC2="$(printf '%s' "$EH2" | sed -nE 's#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' | head -n1)"
+ELOC2="$(printf '%s' "$EH2" | sed -nE 's/^[Ll]ocation: *(.*[^ ]) *\r?$/\1/p' | head -n1)"
+FC2="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$ELOC2" 2>/dev/null)"
+if [ "$EC2" = "302" ] && { [ "$(printf '%s' "$FC2" | cut -c1)" = "2" ] || [ "$(printf '%s' "$FC2" | cut -c1)" = "3" ]; }; then
+  ok "连续第二次点图标仍能进（HTTP $FC2）" "令牌可复用，或 cookie 已生效"
+else
+  bad "第二次点图标进不去（跳转 HTTP ${EC2:-无响应} / 跟随 HTTP ${FC2:-无响应}）" \
+      "令牌可能是一次性的：需要改成「跳转器换 cookie 后转发」"
+fi
+
+CODE3="$(curl -s -m 10 -b "$JAR" -o /dev/null -w '%{http_code}' "$BASED/" 2>/dev/null)"
+say "  （参考）重启前拿到的 dsh cookie 访问 $BASED/ → HTTP $CODE3"
+[ "$CODE3" = "200" ] && ok "dsh 自己的 cookie 跨重启仍有效" \
+  || warn "dsh 的 cookie 已失效（HTTP $CODE3）—— 不影响自动进入，每次都会重新带令牌"
 
 # ---------------------------------------------------------------- 6. 结论
 sec "6. 结论"
-if [ "$VERDICT" = "persist" ]; then
+if [ "$VERDICT" = "auto-ok" ]; then
   cat <<'TXT'
-  cookie 持久 → 「每次取令牌」只是重装导致的错觉。
+  入口可用：点图标 → 3080 跳转器 → 302 带本次令牌 → dsh。
 
-  每台设备只需要粘一次令牌：
-    1) cat /var/apps/dsh/var/dsh-url.txt  （或用 05 第 7 节打印的地址）
-    2) 浏览器打开一次，换成 30 天 cookie
-  之后点应用中心的「打开」按钮即可直接进入，重启应用、重启 NAS 都不影响。
-
-  唯一需要重来的情况：换浏览器/换设备、清 cookie、或超过 30 天。
+  用户侧不需要任何命令：
+    · 每天使用：点桌面图标（或手机书签）即可；
+    · 重启 NAS / 重启应用：令牌会换，但跳转器跟着换，书签不用改；
+    · 想更严格：应用设置里把「入口方式」改成「新设备需粘贴一次令牌」。
 TXT
 else
   cat <<'TXT'
-  cookie 不持久 → 每次重启都要重新粘令牌，当前入口体验确实不可接受。
+  入口异常：点图标没能直接到 dsh。按顺序看：
 
-  两条改法（详细的取舍见聊天里的对比）：
-    A. 跳转器直接放行：3080 由跳转服务占用，点图标即进；等于对局域网关闭令牌。
-    B. 跳转器 + 设备白名单：新设备首次粘一次令牌，之后靠长期 cookie 直接进；
-       令牌栅栏保留。
+    1) cat /var/apps/dsh/var/launcher.json    # token 字段是不是空
+    2) tail -n 30 /var/apps/dsh/var/info.log  # 本次启动有没有抓到 token=
+    3) curl -s http://127.0.0.1:3080/healthz  # ready/auto 两个字段
+
+  若 token 为空，说明 dsh 的入口 URL 没打进日志（格式变了或启动失败）。
 TXT
 fi
 

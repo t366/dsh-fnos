@@ -30,20 +30,29 @@ get_conf() {
 OLD_PORT="$(get_conf DSH_PORT || true)"
 OLD_BIND="$(get_conf DSH_BIND || true)"
 OLD_KEY="$(get_conf DSH_API_KEY || true)"
+OLD_ENTRY="$(get_conf DSH_ENTRY || true)"
 
 PORT="${OLD_PORT:-3080}"
 BIND="${dsh_bind:-}"
 [ -n "$BIND" ] || BIND="${OLD_BIND:-auto}"
 KEY="${dsh_apikey:-}"
 [ -n "$KEY" ] || KEY="$OLD_KEY"
+# keep（或没传）= 沿用旧值；其余按白名单归一化，非法值退回 auto
+ENTRY="${dsh_entry:-keep}"
+case "$ENTRY" in
+  keep|KEEP|"") ENTRY="${OLD_ENTRY:-auto}" ;;
+  pair|PAIR)    ENTRY="pair" ;;
+  *)            ENTRY="auto" ;;
+esac
 
-log "config: port=$PORT bind=$BIND key=$([ -n "$KEY" ] && echo set || echo empty)"
+log "config: port=$PORT bind=$BIND key=$([ -n "$KEY" ] && echo set || echo empty) entry=$ENTRY"
 
 umask 077
 {
   printf 'DSH_PORT=%s\n' "$PORT"
   printf 'DSH_BIND=%s\n' "$BIND"
   printf 'DSH_API_KEY=%s\n' "$KEY"
+  printf 'DSH_ENTRY=%s\n' "$ENTRY"
 } >"$SETTINGS" || fail "无法写入配置文件 $SETTINGS"
 chmod 600 "$SETTINGS" 2>/dev/null
 
@@ -76,6 +85,9 @@ if [ "$(id -u)" = "0" ] && [ -n "$DSH_USER" ]; then
   [ -n "$SHARE" ] && chown "$DSH_USER:$DSH_GROUP" "$SHARE/.dsh-home/settings.conf" 2>/dev/null
 fi
 
+# 必须先 stop 再 start：入口方式（auto/pair）是启动参数，只调 start 会因为
+# 「already running」直接返回，跳转器仍跑在旧模式下 —— 用户改完设置发现没生效。
+"$CMD_DIR/main" stop >>"$LOGFILE" 2>&1 || true
 "$CMD_DIR/main" start >>"$LOGFILE" 2>&1 || fail "配置已保存，但应用启动失败。请检查监听地址是否为有效的局域网 IP。"
 "$CMD_DIR/main" status || fail "配置已保存，但进程未在运行，详见应用日志。"
 

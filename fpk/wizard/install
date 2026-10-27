@@ -4,7 +4,7 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "安装后会以专用用户 dsh 运行，仅监听局域网地址。首次启动会生成一个带 token 的访问链接，可在应用日志中查看。"
+        "helpText": "安装后以专用用户 dsh 运行，只监听局域网地址。装完在应用中心点图标即可进入，不需要再取令牌。"
       },
       {
         "type": "password",
@@ -17,6 +17,20 @@
         "field": "dsh_bind",
         "label": "监听地址（留空或填 auto 表示自动探测）",
         "initValue": "auto"
+      },
+      {
+        "type": "radio",
+        "field": "dsh_entry",
+        "label": "入口方式",
+        "initValue": "auto",
+        "options": [
+          { "label": "点图标直接进入（推荐）", "value": "auto" },
+          { "label": "新设备需粘贴一次令牌", "value": "pair" }
+        ]
+      },
+      {
+        "type": "tips",
+        "helpText": "「直接进入」只对内网地址生效；若从公网地址访问，仍会要求配对，避免入口变成无密码的终端。"
       }
     ]
   }

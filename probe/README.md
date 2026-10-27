@@ -102,24 +102,29 @@ bash ~/04-probe-node.sh ~/
 
 这直接决定 fpk 里该写死路径、还是必须启动时探测。
 
-## 第 5 步：打包、安装、验收（M1）
+## 第 5 步：打包（1 条命令）、前端安装、验收（M1）
+
+NAS 上（`build.sh` 已经内置 selftest，失败会中止）：
 
 ```bash
-scp -r E:/Project2/dsh-fnos/fpk <用户>@<NAS地址>:/root/dsh-fnos/
+cd ~/dsh-fnos && git pull
+cd fpk && bash build.sh full
 ```
 
-NAS 上：
+打完包会自动复制到应用共享目录 `dsh/workspace`。**安装全部在飞牛界面完成**：
+
+1. 应用中心 → dsh → 卸载，选「保留会话、凭据与设置」；
+2. 电脑上打开 文件管理 → 共享目录 `dsh / workspace`，下载 `dsh.fpk`；
+3. 应用中心 → 手动安装 → 选这个 fpk。
+
+然后（可选，只读验收）：
 
 ```bash
-cd /root/dsh-fnos/fpk
-bash selftest.sh                    # 30 秒，先验证生命周期逻辑（不需要 root）
-bash build.sh                       # 骨架包，约 100KB
-appcenter-cli install-fpk ./dsh.fpk
-bash ~/dsh-fnos/probe/05-verify-fpk.sh   # 装完立刻跑，只读验收（含跳转器配对流程）
-bash ~/dsh-fnos/probe/07-cookie-persistence.sh  # 可选：令牌/cookie 语义，会重启一次应用
+bash ~/dsh-fnos/probe/05-verify-fpk.sh        # 结构 + 入口端到端（含自动跳转）
+bash ~/dsh-fnos/probe/07-cookie-persistence.sh # 重启后点图标还能不能进，会重启一次应用
 ```
 
-`selftest.sh` 会伪造一套 `TRIM_*` 环境，在 `/tmp` 里完整跑一遍 `install_init → install_callback → start → status → HTTP → 重复 start → stop → 重复 stop`。它在 M1 上已实测 **15/15 通过**。
+`selftest.sh` 会伪造一套 `TRIM_*` 环境，在临时目录里完整跑一遍 `install_init → install_callback → start → status → HTTP → 重复 start → stop → 重复 stop`，外加跳转器的自动进入/配对/限速。Linux 上全跑，Windows 开发机上会跳过进程语义相关的项。
 
 `05-verify-fpk.sh` **不改任何东西**，只核对「应用中心不会报错、但会静默失败」的那几项：
 
