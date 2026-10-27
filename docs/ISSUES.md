@@ -80,13 +80,15 @@ dsh  /vol1/@appcenter/dsh/runtime/node/bin/node …/dsh/lib/bin.js --profile web
 pidfile 存在、属主 `dsh`、命令行与 `--port 3081` 都对得上，PID 已是新一轮（`3359xxx`，
 此前 root 那批是 `3280xxx`）——即**由平台拉起、以应用用户运行**，不再是残留。
 
-**残留的一项**：`dsh-home` 里仍有 1 个 root 所有的旧会话文件（F16 造成，见
-`find … -user root`）。它不影响启动，但那一条会话可能写不回去，建议顺手修掉：
+**残留的一项已清理（2026-10-27 23:41）**：`dsh-home` 里原有一个 root 所有的旧会话文件
+（F16 造成）。用下面的命令改归属后复核为 **0**：
 
 ```bash
 find /vol1/@appshare/dsh/workspace/.dsh-home -user root -exec chown dsh:AppUsers {} + ; \
   find /vol1/@appshare/dsh/workspace/.dsh-home -user root | wc -l    # 期望 0
 ```
+
+这一步不重启应用即可生效（改的是文件属主，不是进程）。
 
 以后同类现象照上面的判据走；处置步骤见 [RUNBOOK「EADDRINUSE 3080」](RUNBOOK.md)，
 **别用 root 手工 `cmd/main start` 应急**，那正是这条链的起点。
@@ -421,6 +423,7 @@ dsh 也以 root 启动，于是 `dsh-home` 里新生成了 root 所有的 `-wal`
 
 **已受影响的机器**：本机 2026-10-27 那次 `probe/07` 是 root 跑的，
 需要一次性 `chown -R dsh:AppUsers /vol1/@appshare/dsh/workspace/.dsh-home`。
+**已于 23:41 执行完毕，复查 root 文件数 = 0。** 以后只跑 `probe/07` 不会再产生（`run_main()` 已降权）。
 
 ### F17 入口只绑局域网地址，平台/本地自检连不上回环
 

@@ -295,8 +295,8 @@ dsh  …/dsh/lib/bin.js --profile web --host 192.168.0.114 --port 3081
 pidfile 在、属主 `dsh`、命令行与 `--port 3081` 对得上，PID 是新一轮（`3359xxx`，
 root 那批是 `3280xxx`）——**平台拉起、应用用户运行**，P0 关闭。
 
-**唯一残留**：`dsh-home` 里 1 个 root 所有的旧会话文件（F16 现场）。已给出
-`find … -user root -exec chown dsh:AppUsers {} +` 的清理命令。
+**唯一残留**：`dsh-home` 里 1 个 root 所有的旧会话文件（F16 现场）。23:41 用
+`find … -user root -exec chown dsh:AppUsers {} +` 改归属，复查 `find … -user root | wc -l` 得 **0**。
 
 **版本提到 0.6.0**：`manifest` 的 `version` 与 `changelog` 一起改，把 F15 / F17 / F18
 三项写进面向用户的话（停止按钮回来、stop 失败会说原因、密钥权限自动收敛）。
