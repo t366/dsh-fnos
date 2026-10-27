@@ -56,14 +56,22 @@
 
 > 截至 2026-10-27 23:34，代码 `ec1b0b1`、已装包 `0.5.0`。只列**还没关闭**的项；已修条目见第二节。
 
-### P0 现在就要处理：服务是停着的
+### P0 先确认现在跑的是谁：服务「看起来在跑」，但身份没定
 
-F16 → F18 的连锁结果：root 起的跳转器仍占 `192.168.0.114:3080`，`appcenter-cli stop`
+F16 → F18 的连锁结果：root 起的跳转器占着 `192.168.0.114:3080`，`appcenter-cli stop`
 杀不掉它却删了 pidfile，于是三个状态同时成立——**平台认为已停、端口仍被占、`start` 回 10330**。
 
-处置见 [RUNBOOK「EADDRINUSE 3080」](RUNBOOK.md)：按端口反查 pid → `kill` →（端口释放后）
-`appcenter-cli start dsh`。起来后 `ps -o user=` 必须是 `dsh`，不是 `root`。
-**别用 root 手工 `cmd/main start` 应急**，那正是这条链的起点。
+**外部探测区分不了这一层。** 2026-10-27 23:35 实测：`3080/healthz` → `200`、`3081` → `401`，
+但「平台重新拉起的实例」与「21:13 那个 root 进程」都会给出同样结果。判据只有端口属主：
+
+```bash
+ss -ltnp | grep -E ':308[01]'
+ps -o user=,args= -p "$(cut -d' ' -f1 /var/apps/dsh/var/dsh.pid)" 2>/dev/null || echo "无 pidfile"
+```
+
+属主是 `dsh` 才算正常。若是 `root`（或没有 pidfile 却仍有端口占用），按
+[RUNBOOK「EADDRINUSE 3080」](RUNBOOK.md) 处置：按端口反查 pid → `kill` →（端口释放后）
+`appcenter-cli start dsh`。**别用 root 手工 `cmd/main start` 应急**，那正是这条链的起点。
 
 ### P1 已修、等下一次装包才生效
 
