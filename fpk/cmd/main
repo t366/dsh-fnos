@@ -521,8 +521,9 @@ do_start() {
   # dsh 只在日志里打印带 token 的入口 URL，抓出来存一份（600）
   if [ "$MODE" = "dsh" ]; then
     local url="" waited=0
-    # 日志可能比端口晚一拍，最多再等 3s
-    while [ "$waited" -lt 30 ]; do
+    # 端口通了不等于日志已落盘（stdout 缓冲），最多再等 8 秒。
+    # 这个 token 现在是「点图标即进」的唯一来源，早放弃等于入口打不开。
+    while [ "$waited" -lt 80 ]; do
       url="$(tail -c +"$((logoff + 1))" "$LOGFILE" 2>/dev/null \
              | grep -oE 'https?://[^ "'"'"']*token=[A-Za-z0-9_-]+' | tail -n1)"
       [ -n "$url" ] && break

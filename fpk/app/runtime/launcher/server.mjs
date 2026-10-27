@@ -367,6 +367,13 @@ const server = http.createServer(async (req, res) => {
       redirect(res, target);
       return;
     }
+    // 没抓到令牌，但浏览器里已经有 dsh 自己的 cookie（30 天）——直接送去裸地址，
+    // 比让用户对着「正在启动」转圈强。首次访问没有 cookie 时才走后面的提示页。
+    if ((req.headers.cookie || '').trim()) {
+      log(`auto: no token but cookie present, redirect bare ip=${ip}`);
+      redirect(res, `http://${st.host}:${st.port}/`);
+      return;
+    }
     const since = Number(st.since) || 0;
     const fresh = since && Date.now() - since * 1000 < TOKEN_GRACE_MS;
     if (fresh) {
