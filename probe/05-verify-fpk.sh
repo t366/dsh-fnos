@@ -65,13 +65,42 @@ else
 fi
 
 if [ -n "${TARGET:-}" ] && [ -d "$TARGET" ]; then
-  for f in ui/config ui/images/icon_64.png; do
+  # 入口图标文件名由 ui/config 的 icon 字段决定（{0} 由系统替换成尺寸），
+  # 这里按其实际声明去查，别写死 icon_64.png。
+  ICON_REL="$(grep -o '"icon"[[:space:]]*:[[:space:]]*"[^"]*"' "$TARGET/ui/config" 2>/dev/null \
+              | head -n1 | sed 's/.*"\([^"]*\)"$/\1/')"
+  ICON64="${ICON_REL//\{0\}/64}"
+  for f in ui/config "${ICON64:-ui/images/icon_64.png}"; do
     if [ -e "$TARGET/$f" ]; then
       ok "target/$f 存在"
     else
       bad "target/$f 缺失" "说明包内 app/ 没有原样落到 target/，cmd/main 会找不到入口"
     fi
   done
+
+  # 入口图标的真实像素密度：详情页在 ~56px 处显示，高 DPI 屏需要 ≥128 的源才不发虚。
+  # 若这里读到 64，说明安装器把图标降采样了——那是平台行为，只能靠提高对比度补救。
+  ICON_PATH="$TARGET/${ICON64:-ui/images/icon_64.png}"
+  if [ -f "$ICON_PATH" ] && command -v node >/dev/null 2>&1; then
+    ICON_NODE="$(command -v node)"
+    [ -x "$TARGET/runtime/node/bin/node" ] && ICON_NODE="$TARGET/runtime/node/bin/node"
+    PX="$("$ICON_NODE" -e '
+const fs=require("fs");
+try{const b=fs.readFileSync(process.argv[1]);
+  if(b.subarray(1,4).toString()!=="PNG"){console.log("notpng");process.exit(0)}
+  console.log(b.readUInt32BE(16)+"x"+b.readUInt32BE(20));
+}catch(e){console.log("err")}' "$ICON_PATH" 2>/dev/null)"
+    case "${PX:-}" in
+      64x64)          warn "入口图标是 64×64" "详情页显示约 56px，高 DPI 屏会拉伸；已靠高对比设计兜底" ;;
+      *x*)            ICONW="${PX%%x*}"
+                      if [ "${ICONW:-0}" -ge 128 ] 2>/dev/null; then
+                        ok "入口图标像素充足" "$PX"
+                      else
+                        warn "入口图标偏小" "$PX（建议 ≥128）"
+                      fi ;;
+      *)              warn "读不到入口图标尺寸" "$PX" ;;
+    esac
+  fi
   if [ -f "$TARGET/runtime/app/node_modules/@deepseek-ai/dsh/package.json" ]; then
     ok "检测到捆绑的 dsh" "模式 = dsh（完整包）"
     DV="$(node -e 'try{console.log(require(process.argv[1]).version)}catch(e){}' \
