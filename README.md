@@ -11,15 +11,16 @@
 
 | 项 | 值 |
 |---|---|
-| 包版本 | **0.6.0**（已打包成功：自测 58 通过 / 0 失败，`dsh.fpk` 199MB；真机上装的还是 0.5.0） |
-| 最近一次完整真机验收 | **0.5.0 完整包**：`probe/05` **33 PASS / 1 WARN / 0 FAIL**，`probe/07` **10 PASS / 0 FAIL**；监听 `192.168.0.114:3080`，健康检查 `ready=true`。0.6.0 的待验项见 [ISSUES 的 P1/P2](docs/ISSUES.md) |
+| 包版本 | **0.6.5**（真机已装并验收） |
+| 最近一次完整真机验收 | **0.6.5**：图标与启停入口均已确认；0.5.0 时为 `probe/05` **33 PASS / 1 WARN / 0 FAIL**、`probe/07` **10 PASS / 0 FAIL**。待验项见 [ISSUES 的 P1/P2](docs/ISSUES.md) |
 | 数据落点 | 共享目录 `dsh/workspace/.dsh-home`（**跨卸载存活**，已实测） |
 | 运行时 | 自带 Node 24（`v24.22.1`）+ `@deepseek-ai/dsh@0.2.1-rc.3`（钉版理由见 [PLAN §3.2](PLAN.md)） |
 | 尺寸 | 包内 `app/` **977MB / 63054 个文件**；fnpack 压出的 **`dsh.fpk` 199MB**；装完实测 **957M / 63056 个文件**（`du -sh /vol1/@appcenter/dsh`，不含软链的 `/var/apps/dsh`） |
 | 已知问题 | 见 [docs/ISSUES.md](docs/ISSUES.md) |
 
 > 侧载包**没有 CLI 升级通道**：`appcenter-cli install-fpk` 对已装应用只回一句 `is installed`。
-> 升级 = 界面卸载（选保留）+ 界面手动安装。这不是没做，是平台现状，见 [ISSUES P1](docs/ISSUES.md)。
+> 但**界面「手动安装」可以覆盖升级**，不用先卸载（已实测：平台会自己重启进程）。
+> 见 [RUNBOOK 4.1](docs/RUNBOOK.md)。
 
 ## 文档索引
 
@@ -28,7 +29,7 @@
 | `README.md`（本文） | 所有人 | 项目是什么、现在什么状态、文档怎么找 |
 | [docs/DEVLOG.md](docs/DEVLOG.md) | 维护者 | **开发记录**：按时间/版本记改了什么、为什么改、验证结果 |
 | [docs/ISSUES.md](docs/ISSUES.md) | 维护者 / 使用者 | **问题台账**：开头「当前剩余问题（P0–P3）」是**唯一待办来源**；后接平台限制、已修缺陷、待验证项的根因与处置 |
-| [docs/RUNBOOK.md](docs/RUNBOOK.md) | 维护者 | **上真机清单**：打包 → 卸载保留 → 手动安装 → 验收，逐条可复制 |
+| [docs/RUNBOOK.md](docs/RUNBOOK.md) | 维护者 | **上真机清单**：打包 → 手动安装（覆盖升级）→ 验收，逐条可复制 |
 | [PLAN.md](PLAN.md) | 维护者 | 技术方案与决策依据（含 fnOS 生命周期、目录布局、运行时选型、安全模型） |
 | [fpk/README.md](fpk/README.md) | 使用者 | 安装 / 升级 / 排错的完整步骤 |
 | [probe/README.md](probe/README.md) | 使用者 | 真机评估与验收的五个步骤（脚本怎么跑） |
@@ -65,11 +66,10 @@ cd fpk && bash build.sh full
 **安装 / 升级（全部在飞牛界面里点）**
 
 1. 电脑上：文件管理 → 共享目录 `dsh / workspace` → **先下载 `dsh.fpk`**
-   （顺序别反：卸载会把共享目录临时改成 `000`）
-2. 应用中心 → dsh → 卸载 → 选「保留会话、凭据与设置」
-3. 应用中心 → 手动安装 → 选刚下载的 fpk
+2. 应用中心 → 手动安装 → 选刚下载的 fpk（**覆盖升级不用先卸载**，平台会自己重启进程）
    - API Key 留空 = 沿用旧值
    - 入口方式保持默认「点图标直接进入」
+3. 只有安装被拒或要回退版本时，才走「卸载（选保留）→ 安装」
 
 **验收（只读）**
 

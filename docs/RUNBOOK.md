@@ -1,12 +1,13 @@
-# 上真机 runbook —— 打包 → 卸载保留 → 手动安装 → 验收
+# 上真机 runbook —— 打包 → 手动安装（覆盖升级）→ 验收
 
-给 0.6.0 这一版写的执行清单，之后每个版本都可以照抄（把版本号换掉）。
+给 0.6.5 这一版写的执行清单，之后每个版本都可以照抄（把版本号换掉）。
 
 **三条硬规则，先看再动手**
 
 1. **全部命令必须在 NAS 上跑**。`fnpack` 只装在那台机器，`full` 模式要现场 `npm install`，
    Windows 上打不了包。
-2. **先下载新包，再卸载旧应用**。卸载流程会把共享目录临时改成 `000`，顺序反了就拿不到包。
+2. **升级 = 直接装新包，不用卸载**（T11 已实测）。包一定先落到共享目录再从文件管理下载；
+   只有安装被拒或需要回退时才走 4.2 的卸载流程。
 3. **只用普通用户**，不要 root。应用本身是 `run-as: package`（专用用户 `dsh`）。
 
 SSH 没开的话：飞牛 → 系统设置 → 终端与 SSH。
@@ -102,7 +103,7 @@ app/ 文件数：63054
 
 ---
 
-## 第 3 步　先把包下载到电脑（**必须在卸载前**）
+## 第 3 步　先把包下载到电脑（**必须在安装前**）
 
 飞牛 → 文件管理 → 共享目录 `dsh / workspace` → 下载 `dsh.fpk`（约 199MB）。
 
@@ -124,7 +125,7 @@ cp /root/dsh-fnos/fpk/dsh.fpk /vol1/@appshare/dsh/workspace/ && \
 
 ---
 
-## 第 4 步　卸载（选保留）→ 手动安装
+## 第 4 步　手动安装（覆盖升级，不必卸载）
 
 ### 4.0　先开一个磁盘采样（T5 只剩这一个缺口，只做这次）
 
@@ -143,9 +144,11 @@ awk 'NF==2 && $2 ~ /^[0-9]+$/ {print $2}' ~/df-peak.log | sort -n | head -1   # 
 
 「安装前可用 − 全程最小可用」= 解包瞬时占用。只关心它有没有逼近 `install_init` 卡的 1.5GB 线。
 
-### 4.1　可选实验：不卸载，直接装 0.6.0（回答 T11）
+### 4.1　标准升级：不卸载，直接装新包（T11 已实测可行）
 
-**目的**：确认界面「手动安装」到底能不能覆盖升级。能成的话，以后升级就不必每次卸载。
+2026-10-27 实测：装 0.6.0 到已装 0.5.0 的设备上，版本号更新、`server.mjs` 被替换、
+launcher 进程在文件落盘后 **10 秒**重启（平台自己重启的），`dsh-home` 与共享目录都不受影响。
+**所以升级就是装新包，不需要卸载。**
 
 先记两个状态（用来对比）。**注意 `/var/apps/dsh` 可能不存在**（F20 实测过：应用在跑、
 软链入口却没了），所以 manifest 要两处都试：
@@ -154,34 +157,39 @@ awk 'NF==2 && $2 ~ /^[0-9]+$/ {print $2}' ~/df-peak.log | sort -n | head -1   # 
 M=$(ls /var/apps/dsh/manifest /vol1/@appcenter/dsh/manifest 2>/dev/null | head -n1)
 echo "manifest=$M"; grep -E '^[[:space:]]*version' "$M"
 ls -l --time-style=full-iso /vol1/@appcenter/dsh/runtime/launcher/server.mjs
+ps -eo lstart,args | grep 'launcher/server.mjs' | grep -v grep
 ```
 
-然后应用中心 → **手动安装** → 选 0.6.0 的包（**先别卸载**）。装完复核：
+然后应用中心 → **手动安装** → 选新包（**不卸载**）。装完复核：
 
 ```bash
 M=$(ls /var/apps/dsh/manifest /vol1/@appcenter/dsh/manifest 2>/dev/null | head -n1)
-grep -E '^[[:space:]]*version' "$M"                             # 期望 0.6.0
-grep -iE 'upgrade_(init|callback)' /vol1/@appdata/dsh/info.log   # 有则说明钩子被执行
+grep -E '^[[:space:]]*version' "$M"                              # 期望新版本号
 ls -l --time-style=full-iso /vol1/@appcenter/dsh/runtime/launcher/server.mjs
+ps -eo lstart,args | grep 'launcher/server.mjs' | grep -v grep   # lstart 应晚于 mtime
 curl -s -o /dev/null -w 'loop=%{http_code}\n' http://127.0.0.1:3080/healthz
 ```
 
-三种结果分别怎么走：
+判据只看两条：**版本号变了** 且 **进程启动时间晚于 `server.mjs` 的 mtime**。
+满足即升级成功——比查 `upgrade_init` 日志可靠（我们的钩子是空实现，平台也不记录，那行永远是空的）。
 
 | 现象 | 含义 | 下一步 |
 |---|---|---|
-| 版本 `0.6.0`、mtime 更新、`loop=200` | 覆盖安装可行 | **跳过 4.2**，直接进第 5 步 |
-| 版本仍是 `0.5.0`、mtime 没变 | 平台静默跳过（与 CLI 同病） | 回 4.2 走卸载+安装，**数据不丢** |
-| 版本变了但 `loop` 不通 / 点不开 | 叠文件把新旧混在一起 | 也回 4.2 重装一次即可 |
+| 版本变了 + `lstart` 晚于 mtime + `loop=200` | 覆盖升级成功 | 直接进第 5 步 |
+| 版本没变、mtime 没变 | 平台静默跳过 | 走 4.2 卸载+安装，**数据不丢** |
+| 版本变了但进程没重启（`lstart` 早于 mtime） | 跑的还是旧代码 | `appcenter-cli stop dsh && appcenter-cli start dsh` |
+| 安装直接报错 | 包本身有问题（图标规格、manifest 字段） | 保留当前版本继续跑，先排查包 |
 
-### 4.2　卸载与安装
+### 4.2　兜底：卸载（选保留）→ 安装
+
+只有在 4.1 被平台拒绝或需要回退时走这里：
 
 1. 应用中心 → dsh → **卸载** → 弹窗选「**保留会话、凭据与设置**」；
 2. 应用中心 → **手动安装** → 选刚下载的 `dsh.fpk` → 安装；
    - 向导里 **API Key 留空 = 沿用旧值**，不要为了"干净"重填；
    - 「入口方式」保持默认「点图标直接进入」；
 3. 装完点桌面图标，应当直接进 dsh，不出现配对页。
-4. **看应用卡片上有没有「停止」**——这是 F17/T10 的验收点，有就说明回环探测那条推断成立。
+4. 启停入口在**「打开」右侧的 `▼`** 里（「停用 / 卸载」），不在顶部按钮行——看不到不等于没有（T10）。
 
 ---
 
