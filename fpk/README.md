@@ -6,6 +6,9 @@
 > **规范底本**：官方文档已逐页核实并整理在 [`../docs/FNOS-OFFICIAL-DOCS.md`](../docs/FNOS-OFFICIAL-DOCS.md)。
 > 改 `cmd/`、`config/`、`wizard/` 之前先查那份，不要凭记忆——官方站的关键入口是
 > `https://developer.fnnas.com/llms.txt`，`sitemap.xml` 是 404。
+>
+> **遇到问题先看** [`../docs/ISSUES.md`](../docs/ISSUES.md)：平台限制、已修缺陷、待验证项
+> 都在那张表里，多半已经踩过。改动过程记在 [`../docs/DEVLOG.md`](../docs/DEVLOG.md)。
 
 ## 装 / 升级（全部在飞牛界面里点，不用命令行）
 
@@ -90,9 +93,11 @@ cat /var/apps/dsh/var/dsh.pid && ps -o pid,pgid,cmd -p "$(awk '{print $1}' /var/
 真机验收用 `probe/` 下的脚本：
 
 ```bash
-bash ~/dsh-fnos/probe/05-verify-fpk.sh        # 23 项结构 + 入口端到端
+bash ~/dsh-fnos/probe/05-verify-fpk.sh        # 结构 + 入口端到端（自动跳转、配对、限速）
 bash ~/dsh-fnos/probe/07-cookie-persistence.sh # 重启后点图标还能不能进
 ```
+
+两个脚本都只读（`07` 会重启一次应用，约 10 秒不可用），不写系统目录。
 
 ## 目录说明
 
@@ -126,3 +131,7 @@ bash ~/dsh-fnos/probe/07-cookie-persistence.sh # 重启后点图标还能不能�
    `is installed`，没有 force/upgrade 参数；界面上也没有「重新安装」。数据不丢是因为
    会话与凭据放在共享目录（见 PLAN §2.8）。
 4. **绑定地址默认自动探测**，网络未就绪时 `start` 会等最多 60 秒再报错（PLAN §4.2 第 6 条）。
+
+上面四条是使用者会碰到的；平台侧的硬限制（`install-fpk` 静默跳过、`uninstall` 只能走界面、
+缺陷 10237、卸载会清空 `@appdata` 等）与已修缺陷的根因，统一记在
+[`../docs/ISSUES.md`](../docs/ISSUES.md)。

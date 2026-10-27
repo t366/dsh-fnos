@@ -2,6 +2,10 @@
 
 状态：研究稿 **v0.8（M1 自测通过；打包前按官方规范校正 build/manifest）**　日期：2026-10-27
 
+> 本文是**方案与决策依据**。想知道「现在做到哪一步」「踩过哪些坑」，看
+> [README.md](README.md) / [docs/DEVLOG.md](docs/DEVLOG.md) / [docs/ISSUES.md](docs/ISSUES.md)；
+> 本文只负责解释「为什么这么设计」。
+
 ---
 
 ## 0. 结论摘要
