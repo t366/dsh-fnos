@@ -11,12 +11,24 @@
 
 SSH 没开的话：飞牛 → 系统设置 → 终端与 SSH。
 
+> **路径约定**：本文用 `/var/apps/dsh/...`，那是平台给应用挂的**软链入口**。
+> 它并非一直存在（2026-10-27 23:44 实测：应用在跑、`/var/apps/dsh` 却没了，见 F20）。
+> 一旦它不在，按下面的实体路径替换前缀：
+>
+> | 软链 | 实体 |
+> |---|---|
+> | `/var/apps/dsh/target`（代码、runtime） | `/vol1/@appcenter/dsh` |
+> | `/var/apps/dsh/var`（`info.log`、pidfile、launcher.json） | `/vol1/@appdata/dsh` |
+> | `/var/apps/dsh/etc`（`settings.conf`） | `/vol1/@appconf/dsh` |
+> | `/var/apps/dsh/shares/workspace`（共享目录） | `/vol1/@appshare/dsh/workspace` |
+
 ---
 
 ## 第 0 步　确认已装版本（决定要不要改版本号）
 
 ```bash
-grep -E '^[[:space:]]*version' /var/apps/dsh/manifest
+M=$(ls /var/apps/dsh/manifest /vol1/@appcenter/dsh/manifest 2>/dev/null | head -n1)
+echo "manifest=$M"; grep -E '^[[:space:]]*version' "$M"
 ```
 
 | 输出 | 怎么做 |
@@ -24,6 +36,7 @@ grep -E '^[[:space:]]*version' /var/apps/dsh/manifest
 | `0.5.0` | 直接进第 1 步：仓库里的 `manifest` 已经是 `0.6.0`，比它高一级，能正常覆盖 |
 | `0.6.0`（与 `fpk/manifest` 相同） | 先把 `fpk/manifest` 的 `version` 提到 `0.6.1` 再打包，否则 `build.sh` 会直接 `die`（F12 版本守卫） |
 | 其他（`0.2.0` / `0.4.0` …） | 直接进第 1 步 |
+| 两处都没有（`manifest=` 为空） | 平台侧状态异常，先跑 `appcenter-cli status dsh` 与 `ls -ld /var/apps /vol1/@appcenter/dsh`，把输出留下再继续 |
 
 顺手确认一下仓库里的版本（第 1 步 `git pull` 之后再跑）：
 
@@ -44,18 +57,19 @@ git pull
 git log --oneline -1
 ```
 
-期望最后一行是：
+期望最后一行是含 F20 修复的那条提交（与 Gitea 网页上 `main` 的最新一条一致）。
+判据以工作区实际内容为准，不用记 commit 号：
 
-```
-438d816 ISSUES: P0 改用端口属主判定——外部探测无法区分 root 残留与平台拉起
+```bash
+grep '^version' fpk/manifest                      # 必须是 0.6.0
+grep -c '@appshare' fpk/build.sh                  # 必须 > 0（F20 的落点修复在里面）
 ```
 
-不是这条就先别打包——`build.sh` 打的是工作区里的代码，不是远端。
-**以版本号为准更稳**：`grep '^version' fpk/manifest` 必须是 `0.6.0`。
+不是这样就先别打包——`build.sh` 打的是工作区里的代码，不是远端。
 
 ---
 
-## 第 2 步　打包（5–15 分钟，产物约 990MB）
+## 第 2 步　打包（5–15 分钟；包内 977MB，产出 `dsh.fpk` 约 199MB）
 
 ```bash
 cd ~/dsh-fnos/fpk
@@ -64,17 +78,21 @@ bash build.sh full 2>&1 | tee ~/build-$(grep -E '^version' manifest | cut -d'"' 
 
 `build.sh` 会先跑 `selftest.sh`（约 30 秒），自测不过直接中止。
 
-**必须看到这三行，缺一行就是没过：**
+**必须看到这四行，缺一行就是没过：**
 
 ```
 通过 58 / 跳过 0 / 失败 0
 dsh 版本校验通过：0.2.1-rc.3
-产物：./dsh.fpk（…）
+app/ 文件数：63054
+产物：./dsh.fpk（199M，版本 0.6.0）
 ```
 
 - Linux 上「跳过」必须是 **0**。开发机（Windows）上的 22 项跳过是权限位、`/proc`、
   进程组这些只能在真机判定的断言，这里会真正执行。
-- **通过数只作参考**（本轮预期 58；每加一条断言就会变），真正的判据是 **`跳过 0 / 失败 0`**。
+- **通过数只作参考**（本轮 58；每加一条断言就会变），真正的判据是 **`跳过 0 / 失败 0`**。
+- `== 版本 ==` 那行必须读到已装版本，形如
+  `已安装：0.5.0（读自 /vol1/@appcenter/dsh/manifest）`。**若显示 `<无>`，先别继续**：
+  那是 F20 的现场（守卫会空转），先按 F20 的候选路径确认包到底在哪。
 - 如果自测开头出现「沙箱内已移除残留的 dsh 运行时」，说明源码树里带着上一次 full
   构建的 `app/runtime/app`（`.gitignore` 的，`git pull` 不会清）。这行是**正常且预期**的
   ——自测已经把它隔离在沙箱外，不影响结论。
@@ -86,10 +104,23 @@ dsh 版本校验通过：0.2.1-rc.3
 
 ## 第 3 步　先把包下载到电脑（**必须在卸载前**）
 
-飞牛 → 文件管理 → 共享目录 `dsh / workspace` → 下载 `dsh.fpk`。
+飞牛 → 文件管理 → 共享目录 `dsh / workspace` → 下载 `dsh.fpk`（约 199MB）。
 
-`build.sh` 打完会自动把包复制到这里；找不到就看第 2 步输出的最后几行，
-它一定打印了「包留在 / 已放到共享目录：…」的真实路径。
+`build.sh` 打完会自动把包复制到共享目录，正常会打印：
+
+```
+已放到共享目录：/vol1/@appshare/dsh/workspace/dsh.fpk
+```
+
+**若它打印「没找到共享目录，包留在 /root/…」（F20 的另一种现场），包在 `/root` 下
+文件管理看不到**，手动搬一行即可：
+
+```bash
+cp /root/dsh-fnos/fpk/dsh.fpk /vol1/@appshare/dsh/workspace/ && \
+  chmod 644 /vol1/@appshare/dsh/workspace/dsh.fpk
+```
+
+（`/vol1/@appshare/dsh/workspace` 是共享目录的实体路径，卸载时选「保留数据」它不会被清。）
 
 ---
 
@@ -116,18 +147,21 @@ awk 'NF==2 && $2 ~ /^[0-9]+$/ {print $2}' ~/df-peak.log | sort -n | head -1   # 
 
 **目的**：确认界面「手动安装」到底能不能覆盖升级。能成的话，以后升级就不必每次卸载。
 
-先记两个状态（用来对比）：
+先记两个状态（用来对比）。**注意 `/var/apps/dsh` 可能不存在**（F20 实测过：应用在跑、
+软链入口却没了），所以 manifest 要两处都试：
 
 ```bash
-grep -E '^[[:space:]]*version' /var/apps/dsh/manifest
+M=$(ls /var/apps/dsh/manifest /vol1/@appcenter/dsh/manifest 2>/dev/null | head -n1)
+echo "manifest=$M"; grep -E '^[[:space:]]*version' "$M"
 ls -l --time-style=full-iso /vol1/@appcenter/dsh/runtime/launcher/server.mjs
 ```
 
 然后应用中心 → **手动安装** → 选 0.6.0 的包（**先别卸载**）。装完复核：
 
 ```bash
-grep -E '^[[:space:]]*version' /var/apps/dsh/manifest          # 期望 0.6.0
-grep -iE 'upgrade_(init|callback)' /var/apps/dsh/var/info.log  # 有则说明钩子被执行
+M=$(ls /var/apps/dsh/manifest /vol1/@appcenter/dsh/manifest 2>/dev/null | head -n1)
+grep -E '^[[:space:]]*version' "$M"                             # 期望 0.6.0
+grep -iE 'upgrade_(init|callback)' /vol1/@appdata/dsh/info.log   # 有则说明钩子被执行
 ls -l --time-style=full-iso /vol1/@appcenter/dsh/runtime/launcher/server.mjs
 curl -s -o /dev/null -w 'loop=%{http_code}\n' http://127.0.0.1:3080/healthz
 ```

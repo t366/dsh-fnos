@@ -32,7 +32,7 @@
 ```bash
 cd ~/dsh-fnos/fpk
 bash selftest.sh          # 30 秒，不需要 root、不占 3080
-bash build.sh full        # 捆绑 node + dsh，产出约 990MB 的 dsh.fpk
+bash build.sh full        # 捆绑 node + dsh；包内 977MB，压出的 dsh.fpk 约 199MB
 ```
 
 `full` 会把 `nodejs_v24` 的 node 与 `@deepseek-ai/dsh@0.2.1-rc.3` 装进 `app/runtime/`

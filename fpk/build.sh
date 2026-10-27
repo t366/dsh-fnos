@@ -3,7 +3,7 @@
 # 在飞牛 NAS 上打包 fpk。
 #
 #   bash build.sh              # 骨架包（不含 dsh 运行时，约 100KB）
-#   bash build.sh full         # 完整包（捆绑 node + dsh，约 990MB）
+#   bash build.sh full         # 完整包（捆绑 node + dsh；包内 977MB、fpk 约 199MB）
 #
 # 默认行为（都是为了少记命令）：
 #   · 先跑 selftest.sh，失败就中止          → DSH_SKIP_SELFTEST=1 跳过
@@ -86,9 +86,33 @@ mval() { # $1=文件 $2=键 —— 安装后的 manifest 会被 fnOS 重写，�
 }
 PKG_APP="$(mval manifest appname)"
 PKG_VER="$(mval manifest version)"
+
+# 已装版本的来源不能只看 /var/apps/<app>。
+# 2026-10-27 23:44 实测：应用明明在跑（3080/healthz 200），但 /var/apps/dsh 不存在，
+# 于是这里读到空值 → 版本守卫**静默失效**（同版本也能打出来，装上去是空操作）。
+# 所以按「平台软链 → 实体目录 → 元数据目录」三处依次找，任一命中即可。
 INST_VER=""
-[ -n "$PKG_APP" ] && [ -f "/var/apps/$PKG_APP/manifest" ] && INST_VER="$(mval "/var/apps/$PKG_APP/manifest" version)"
-say "包：$PKG_APP $PKG_VER    已安装：${INST_VER:-<无>}"
+INST_PATH=""
+for _m in "/var/apps/$PKG_APP/manifest" \
+          "/vol1/@appcenter/$PKG_APP/manifest" \
+          "/vol1/@appmeta/$PKG_APP/manifest"; do
+  if [ -f "$_m" ]; then
+    INST_VER="$(mval "$_m" version || true)"
+    if [ -n "$INST_VER" ]; then INST_PATH="$_m"; break; fi
+  fi
+done
+say "包：$PKG_APP $PKG_VER    已安装：${INST_VER:-<无>}${INST_PATH:+（读自 $INST_PATH）}"
+
+# 读不到就明说，别让守卫悄悄变成空转。平台自己知道装没装，用它当旁证。
+if [ -z "$INST_VER" ] && command -v appcenter-cli >/dev/null 2>&1; then
+  if appcenter-cli check "$PKG_APP" 2>/dev/null | grep -qi 'is installed'; then
+    say ""
+    say "⚠ 平台说 $PKG_APP 已安装，但上面三处都读不到它的 manifest。"
+    say "   本次版本守卫无法生效——请确认你要装的版本确实高于已装版本。"
+    say "   现场：ls -l /var/apps/$PKG_APP /vol1/@appcenter/$PKG_APP 2>&1"
+    say ""
+  fi
+fi
 if [ -n "$INST_VER" ] && [ "$PKG_VER" = "$INST_VER" ]; then
   if [ "${DSH_ALLOW_SAME_VERSION:-0}" = "1" ]; then
     say ""
@@ -313,12 +337,21 @@ if [ "${DSH_STAGE:-1}" = "0" ]; then
   say "已按 DSH_STAGE=0 跳过复制；包留在 $HERE/$FPK"
 else
   SHARE=""
-  for p in "/var/apps/$PKG_APP/shares/workspace" "/var/apps/$PKG_APP/share/workspace" \
+  # 候选按「真的能下载到」排序：
+  #   /vol1/@appshare/<app>/workspace 是共享目录实体，卸载后也还在（数据保留）；
+  #   /var/apps/<app>/shares/workspace 是指向它的软链入口，应用被平台摘掉时会跟着消失
+  #   （2026-10-27 23:44 就是这样：应用在跑，/var/apps/dsh 却没了，包只能落在 /root）。
+  for p in "/vol1/@appshare/$PKG_APP/workspace" \
+           "/var/apps/$PKG_APP/shares/workspace" \
+           "/vol1/@appshare/$PKG_APP" \
+           "/var/apps/$PKG_APP/share/workspace" \
            "$HERE/shares/workspace"; do
     [ -d "$p" ] && { SHARE="$p"; break; }
   done
   if [ -z "$SHARE" ]; then
-    say "没找到共享目录（应用还没装？），包留在 $HERE/$FPK"
+    say "没找到共享目录，包留在 $HERE/$FPK"
+    say "想从界面下载，手动复制一行即可（把 <共享目录> 换成文件管理里能看到的位置）："
+    say "  cp '$HERE/$FPK' <共享目录>/ && chmod 644 <共享目录>/$FPK"
   else
     if cp -f "$FPK" "$SHARE/$FPK" 2>/dev/null; then
       chmod 644 "$SHARE/$FPK" 2>/dev/null || true
@@ -326,6 +359,7 @@ else
       say "电脑上：飞牛 → 文件管理 → 共享目录「dsh / workspace」→ 下载 $(basename "$FPK")"
     else
       say "⚠ 复制到共享目录失败（权限或空间），包留在 $HERE/$FPK"
+      say "  手动：cp '$HERE/$FPK' '$SHARE/' && chmod 644 '$SHARE/$FPK'"
     fi
   fi
 fi
@@ -334,9 +368,9 @@ say ""
 say "安装 / 升级（全部在飞牛界面里完成，无需命令行）："
 say "  1) 电脑上：文件管理 → 共享目录「dsh / workspace」→ 先把 $(basename "$FPK") 下载下来"
 say "     （务必在卸载之前下载：卸载会临时把共享目录权限改成 000）"
-say "  2) 应用中心 → dsh → 卸载，数据选「保留会话、凭据与设置」"
-say "  3) 应用中心 → 手动安装 → 选择刚下载的 $(basename "$FPK") → 安装"
-say "     向导里 API Key 留空即沿用旧值，入口方式默认「点图标直接进入」"
+say "  2) 应用中心 → 手动安装 → 选这个 fpk，直接装（先不卸载，看它是否真替换）"
+say "     若装完版本没变（应用中心只回 is installed），再走：卸载（保留数据）→ 手动安装"
+say "  3) 向导里 API Key 留空即沿用旧值，入口方式默认「点图标直接进入」"
 say ""
 if [ -n "$INST_VER" ] && [ "$PKG_VER" = "$INST_VER" ]; then
   say "注意：版本与已安装的相同，装上去不会替换 target/（本次由 DSH_ALLOW_SAME_VERSION=1 放行）。"

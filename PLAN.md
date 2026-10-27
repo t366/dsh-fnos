@@ -320,7 +320,7 @@ error="10237:fork/exec /tmp/appcenter.pack./cmd/install_init: permission denied"
 
 | 方案 | 形态 | 体积（实测/推算） | 要改 dsh 仓库 | 风险 | 结论 |
 |---|---|---|---|---|---|
-| **R1 自带 Node + npm 产物** | `target/runtime/` 里放 node24 官方二进制 + `npm i --omit=dev @deepseek-ai/dsh` 的树 | **866MB（dsh）+ 约 127MB（node）= 约 990MB** | 否 | 低：等同官方 `npx @deepseek-ai/dsh web` | ✅ **v1 默认** |
+| **R1 自带 Node + npm 产物** | `target/runtime/` 里放 node24 官方二进制 + `npm i --omit=dev @deepseek-ai/dsh` 的树 | **866MB（dsh）+ 约 127MB（node）≈ 977MB**（实测；fnpack 压缩后 fpk 199MB） | 否 | 低：等同官方 `npx @deepseek-ai/dsh web` | ✅ **v1 默认** |
 | **R1b 复用 fnOS 的 `nodejs_v24`** | 只放 dsh 树，node 用 `/vol{N}/@appcenter/nodejs_v24/bin/node`（实测 **24.22.1**，满足 ≥24.9；**PATH 里没有它**） | 866MB，**只省约 127MB（-13%）** | 否 | **中**：依赖某存储卷已挂载 + 该应用未被卸载/跨大版本替换；且必须自己探测路径 | ⏭ 只作 slim 变体 |
 | **R2 单文件 exe** | 用仓库已有 `pkg --sea` 构建，把闭包从 `sdk` 换成 `web` | 单文件约 200MB | 是：新增 web 闭包清单 + 构建脚本 | 中：前端资源 glob、native 插件、仅 Linux 原生构建；**不支持用户装插件**、HMR 关 | ⏭ v2 瘦身 |
 | **R3 用 `install_dep_apps=nodejs_v22`** | 依赖系统 Node 22 | 0 | 否 | **致命**：`>=24.9` 不满足 | ❌ 放弃 |
@@ -333,7 +333,7 @@ error="10237:fork/exec /tmp/appcenter.pack./cmd/install_init: permission denied"
 |---|---|
 | Node 官方 linux-x64 包（tar.xz） | **30.6 MB** 压缩 |
 | 解压后 | 官方包约 **120 MB**；飞牛应用实测 node 二进制 **126.9 MB**（整个应用 204MB / 4797 文件） |
-| 占 v1 总包（约 990MB）比例 | **约 13%** |
+| 占 v1 总包（约 977MB）比例 | **约 13%** |
 | 换来的耦合 | 依赖 `存储空间1` 已挂载；该商店应用未被卸载/降级/跨大版本替换（`nodejs_v24` → `nodejs_v26` 时路径全变） |
 
 省 13% 的体积，代价是**把"能不能启动"外包给一个用户可以随手卸载的商店应用**。这台机器的 `nodejs_v24` 装在一个**数据卷**上（`/vol1/@appcenter/nodejs_v24`）——该卷在开机时没挂上，`target` 软链就是断的，dsh 直接起不来；fpk 自带的 runtime 不会有这个问题。
@@ -555,7 +555,8 @@ dsh/
 
 实测：`npm i --omit=dev @deepseek-ai/dsh` = **866 MB / 63053 个文件**。原估 350–600MB，低估了约 40%。
 
-> **现状（2026-10-27，0.6.0）**：瘦身**还没做**——包 990MB，装完 **957M / 63056 个文件**
+> **现状（2026-10-27，0.6.0）**：瘦身**还没做**——包内 977MB、`dsh.fpk` 199MB，
+> 装完 **957M / 63056 个文件**
 > （`du -sh /vol1/@appcenter/dsh`，不能用 `/var/apps/dsh`，那里全是软链）。
 > 好消息是安装耗时只有约 **22 秒**（`install_init` → `ok`），inode 数没有把安装压垮；
 > 所以瘦身的价值从「不然装不上」降级成「省盘、省传输时间」。详见 ISSUES 的 T5。
@@ -779,7 +780,7 @@ upgrade_init（解包前）→ 解包新 app/ 覆盖 target → upgrade_callback
 | 5 | 应用用户出站 HTTPS 可达（DeepSeek 401、npmmirror / GitHub 200） |
 | 6 | 首次冷启动 RSS 406MB / 11 线程 / 3 秒 → 4GB 机型可用 |
 | 9 | 自签 fpk **不会**触发 `upgrade_init/callback`：只回 `is installed`，文件 mtime 不变 |
-| 12 | 大 fpk：包 990MB / 装完 957M、63056 文件，`install_init → ok` 约 **22 秒** |
+| 12 | 大 fpk：包内 977MB / `dsh.fpk` 199MB / 装完 957M、63056 文件，`install_init → ok` 约 **22 秒** |
 | 13 | 统一网关支持 WebSocket；瓶颈在 dsh 侧（要 Unix Socket + 前缀），v1 不做 |
 | 19 | `cmd/main` 的 PATH 里确实有 v22 干扰，但启动一律用 bundled node 绝对路径，未受影响 |
 | 21 | fnpack 保留 `cmd/*` 执行位：装机后 9 个全 755 |
