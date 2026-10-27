@@ -1,5 +1,5 @@
 appname="dsh"
-version="0.6.1"
+version="0.6.2"
 display_name="DeepSeek Harness"
 desc="DeepSeek 开源的 agent harness（dsh）。以本地 Web 界面提供 AI 编程智能体，支持工具调用、终端与文件操作，仅限局域网访问。"
 source="thirdparty"
@@ -18,4 +18,4 @@ checkport="true"
 service_port="3080"
 disable_authorization_path="true"
 
-changelog="0.6.1：修掉 0.6.0 里一处没生效的修复。配对密钥权限的自动收敛条件写错了（只检查了组/其他用户位，700 这种多出执行位的情况漏判），导致旧密钥的 700 权限一直没被纠正。本次改为整段比对，首次启动即收敛为 600。同时把图标换成 DeepSeek Harness 官方蓝鲸标识。除此之外没有功能变化。"
+changelog="0.6.2：图标补足像素密度。应用中心详情页实际在 56px 左右的位置显示图标，高分屏（125%/150% 缩放）下 64px 源图被放大，鲸鱼的眼睛与尾鳍会发虚——现在入口图标改用高分辨率源，同一位置显示更锐利。同时包含 0.6.1 的修复：配对密钥权限的自动收敛条件此前漏判 700，已改为整段比对，首次启动即收敛为 600。"

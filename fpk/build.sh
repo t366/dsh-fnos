@@ -140,13 +140,18 @@ say "ok"
 if command -v node >/dev/null 2>&1; then
   node -e '
 const fs=require("fs");
-const want={"ICON.PNG":64,"ICON_256.PNG":256,"app/ui/images/icon_64.png":64,"app/ui/images/icon_256.png":256};
+// icon_64.png 允许承载 256 的源图：ui/config 用 images/icon_{0}.png 做入口图标，
+// 详情页实际在 ~56px 的位置显示它。高 DPI 屏（125%/150%）需要 70~84 物理像素，
+// 64px 被放大后鲸鱼的眼睛、尾鳍就糊了（2026-10-28 用户实测反馈）。
+// 文件名保持不变，只把像素给足，浏览器缩放时更清晰。
+const want={"ICON.PNG":64,"ICON_256.PNG":256,"app/ui/images/icon_64.png":[64,256],"app/ui/images/icon_256.png":256};
 let bad=0;
 for(const [f,exp] of Object.entries(want)){
   const b=fs.readFileSync(f);
   if(b.subarray(1,4).toString()!=="PNG"){console.log("✗ "+f+" 不是 PNG");bad=1;continue;}
   const w=b.readUInt32BE(16),h=b.readUInt32BE(20),kb=Math.round(b.length/1024);
-  const ok=w===exp&&h===exp&&b.length<=1024*1024;
+  const dims=Array.isArray(exp)?exp:[exp];
+  const ok=dims.indexOf(w)>=0&&w===h&&b.length<=1024*1024;
   console.log((ok?"ok  ":"✗   ")+f+"  "+w+"x"+h+"  "+kb+"KB");
   if(!ok)bad=1;
 }
