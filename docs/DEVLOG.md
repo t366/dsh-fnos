@@ -174,15 +174,48 @@ dsh 退到 13081，`GET 13080/` 返回 302，而该段断言写的是骨架模�
 而自测的假设建立在「源码树是干净的」之上。凡是「按目录存在性判断分支」的地方，
 都要先问一句「这个目录会不会是残留」。
 
+## 阶段 10：0.5.0 装上真机，T1 / T2 关闭（21:09–21:14）
+
+F14 修复后重新打包，自测通过，随后界面卸载（保留）→ 手动安装。**第一次把 0.5.0 装到真机上。**
+
+```console
+probe/05   PASS 33 / WARN 1 / FAIL 0
+probe/07   PASS 10 / FAIL 0（auto-ok）
+healthz    {"ok":true,"ready":true,"auto":true,"mode":"auto"}
+```
+
+关键事实：
+
+| 项 | 实测 |
+|---|---|
+| 版本 | `0.5.0`；`target → /vol1/@appcenter/dsh`；bundled dsh `0.2.1-rc.3`、node `v24.22.1` |
+| 权限 | 9 个 `cmd/*` 全 755；应用用户 `dsh` uid=971；`dsh-home` 700、`settings.conf` 600 |
+| 端口 | 三处一致 3080；launcher 绑 `192.168.0.114:3080`、dsh 绑 `:3081`；3081 裸访问仍 401 |
+| 安装耗时 | `install_init` 21:09:29 → `ok` 21:09:51，**解包完成后约 22 秒**可用 |
+| F9 | 外部实测：直连 302；`X-Forwarded-For` / `X-Real-IP` / `Forwarded` 均 200 配对页 |
+
+**T2 顺手关掉**（这条悬了整轮）：`probe/07` 的「第二次点击」用的是不带 cookie 的独立
+curl，仍然 303 —— 说明**令牌可复用，不是一次性的**；重启前的 dsh cookie 也能继续用（200）。
+所以「302 把令牌写进 `Location`」的设计成立，不用改成「先换 cookie 再转发」。
+脚本注释里那句「带 jar 测就是假阳性」这次起了作用。
+
+本轮顺带修的小问题与新发现的测量坑：
+
+| 编号 | 内容 |
+|---|---|
+| F15 | 配对密钥 700 不自愈：`loadSecret()` 读到旧文件直接返回，早期版本留下的宽权限永远不改。改为读到即 `chmod 600` |
+| — | `du -sh /var/apps/dsh` 只有 132K/17 文件——`target`、`var`、`etc` 都是软链，`du` 不跟随。真实体积要 `du /vol1/@appcenter/dsh` |
+| — | `curl 127.0.0.1:3080/healthz` 返回空：launcher 绑的是局域网 IP。README 与 RUNBOOK 的排错命令已改成先解析 `DSH_BIND` |
+
 ## 下一步
 
-1. **重跑** `bash build.sh full`（NAS 上预期 `56 通过 / 0 跳过 / 0 失败`），
-   确认 `dsh 版本校验通过：0.2.1-rc.3`；
-2. 界面卸载（保留）→ 手动安装 → 点图标应直接进入（不再出现配对页）；
-3. 跑 `probe/05-verify-fpk.sh` 与 `probe/07-cookie-persistence.sh`，回答 T2
-   （cookie 是否活过重启、令牌是否一次性）；
-4. 若令牌一次性 → 跳转器要改成「先换 cookie 再转发」；
-5. **中期**：接飞牛统一网关（T7），launcher 只监听 `127.0.0.1`，同时解决
-   双网卡、DDNS、FN Connect 与鉴权；看护（T8）在同一轮设计，避免两套重启逻辑打架。
+1. **体积与文件数**：`du -sh /vol1/@appcenter/dsh` 与 `find … -type f | wc -l`（T5 唯一缺口）；
+2. **瘦身**（一次性收益）：改用 `install_dep_apps: nodejs_v24` + 只打包 `node_modules`，
+   目标把 990MB 压到 ~120MB；同时补插件能力（`bin/dsh` 包装 + 官方 plugin market bundle）与 ARM 包；
+3. **接飞牛统一网关**（T7）：launcher 只监听 `127.0.0.1`，走 `app.sock`；同时解决双网卡、
+   DDNS、FN Connect，并把 F9 的「一律配对」升级成「只信任网关身份头」；
+4. **进程看护**（T8）：launcher 兼看护，或由 `status` 探测触发拉起；与统一网关同轮设计，
+   避免两套重启逻辑打架；
+5. **端口可配**（T3）：`manifest` / 桌面入口 / 向导 / 跳转器四处一起改。
 
 未完成项见 [ISSUES.md](ISSUES.md) 第三节。

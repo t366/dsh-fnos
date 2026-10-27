@@ -98,12 +98,20 @@ dsh 版本校验通过：0.2.1-rc.3
 
 ```bash
 bash ~/dsh-fnos/probe/05-verify-fpk.sh 2>&1 | tee ~/p05.log
-curl -s http://127.0.0.1:3080/healthz; echo
+
+# healthz 要走绑定地址：127.0.0.1 不通（launcher 绑的是局域网 IP），
+# 用回环 curl 只会得到空响应，看起来像没起来。
+BIND=$(sed -n 's/^DSH_BIND=//p' /var/apps/dsh/etc/settings.conf | head -n1)
+case "$BIND" in ''|auto) BIND=$(sed -n 's/.*bind=\([0-9.]*\).*/\1/p' /var/apps/dsh/var/info.log | tail -n1) ;; esac
+curl -s "http://${BIND:-127.0.0.1}:3080/healthz"; echo
+
+# 体积/文件数：/var/apps/dsh 是外壳，target/var/etc 都是软链，du 不跟随。
+du -sh /vol1/@appcenter/dsh; find /vol1/@appcenter/dsh -type f | wc -l
 ```
 
 判据：
 
-- 末尾 `FAIL` 必须为 **0**（`WARN` 允许存在，逐条看是不是已知的那三项）；
+- 末尾 `FAIL` 必须为 **0**（`WARN` 允许存在，逐条看是不是已知的那几项）；
 - `healthz` 返回 `{"ok":true,"ready":true,"auto":true,"mode":"auto"}`；
 - 重点看它报的三处端口是否一致、`cmd/*` 执行位是否 9 个都在。
 
@@ -120,9 +128,12 @@ curl -s -o /dev/null -w 'proxied=%{http_code}\n' -H 'X-Forwarded-For: 1.2.3.4' h
 **升级前实测：两条都是 302。** 说明旧版确实会把「经反代的公网访客」当成内网放行。
 升级后必须是 `direct=302` / `proxied=200`，这一条不通过就等于 P0 没修好。
 
+（2026-10-27 装 0.5.0 后实测：`direct=302`、`X-Forwarded-For` / `X-Real-IP` /
+`Forwarded` 三种头均 `200`，P0 已关。）
+
 ---
 
-## 第 6 步　回答 T2：令牌是否一次性、cookie 能否活过重启
+## 第 6 步　回归 T2：令牌是否一次性、cookie 能否活过重启
 
 ```bash
 bash ~/dsh-fnos/probe/07-cookie-persistence.sh 2>&1 | tee ~/p07.log
@@ -130,13 +141,15 @@ bash ~/dsh-fnos/probe/07-cookie-persistence.sh 2>&1 | tee ~/p07.log
 
 会重启一次应用，约 10 秒不可用，期间不要用浏览器操作。
 
-看两件事：
+**0.5.0 已给出结论**（2026-10-27）：令牌**可复用**（连续两次不带 cookie 点图标都 303）、
+dsh 的 cookie **跨重启仍有效**（200）。所以「302 把令牌写进 `Location`」的设计成立，
+不需要改成「先换 cookie 再转发」。之后每版跑这一步当**回归**：
 
 1. 重启后 GET `3080` 是否 **仍然 302 到新令牌**，跟随能否进到底；
-2. dsh 自己的 cookie 是否跨重启存活。
+2. 连续第二次点图标是否仍能进（脚本用**不带 cookie 的独立请求**，带 jar 测就是假阳性）；
+3. dsh 自己的 cookie 是否跨重启存活。
 
-结论决定下一步：**若令牌一次性**，launcher 就得从「302 转发令牌」改成
-「先换 cookie、再转发」；**若 cookie 能活过重启**，现有设计可以保留。
+任一条退回，说明 dsh 上游的令牌语义变了，launcher 要改设计。
 
 ---
 

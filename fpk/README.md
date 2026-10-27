@@ -75,7 +75,11 @@ dsh 每次启动都会 mint 新 token，且没有「固定令牌」开关，所�
 tail -n 50 /var/apps/dsh/var/info.log
 
 # 入口状态：ready=跳转器有 state，auto=能自动跳，mode=入口模式
-curl -s http://127.0.0.1:3080/healthz
+# 注意：launcher 绑的是「自动探测到的局域网地址」，不是 127.0.0.1——
+# 拿回环地址去 curl 会得到空响应，看起来像没起来（0.5.0 装机时踩过）。
+BIND=$(sed -n 's/^DSH_BIND=//p' /var/apps/dsh/etc/settings.conf | head -n1)
+case "$BIND" in ''|auto) BIND=$(sed -n 's/.*bind=\([0-9.]*\).*/\1/p' /var/apps/dsh/var/info.log | tail -n1) ;; esac
+curl -s "http://${BIND:-127.0.0.1}:3080/healthz"
 
 # 这一轮的令牌（一般不用看，跳转器自己会用）
 cat /var/apps/dsh/var/launcher.json

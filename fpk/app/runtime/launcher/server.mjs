@@ -69,7 +69,15 @@ function loadSecret() {
   if (SECRET) return SECRET;
   try {
     const s = fs.readFileSync(SECRET_FILE, 'utf8').trim();
-    if (s.length >= 32) return (SECRET = Buffer.from(s, 'hex'));
+    if (s.length >= 32) {
+      // 自愈：只在「文件已存在」这条路径上才知道它可能是旧版本留下的。
+      // 早期版本用更宽的权限创建过这个文件，而下面写新文件时才 chmod，
+      // 于是 700 会一直跟着（probe/05 会报 WARN）。这里读到就顺手收紧一次。
+      try {
+        if ((fs.statSync(SECRET_FILE).mode & 0o077) !== 0) fs.chmodSync(SECRET_FILE, 0o600);
+      } catch {}
+      return (SECRET = Buffer.from(s, 'hex'));
+    }
   } catch {}
   SECRET = crypto.randomBytes(32);
   try {

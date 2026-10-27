@@ -11,11 +11,11 @@
 
 | 项 | 值 |
 |---|---|
-| 包版本 | **0.5.0**（代码就绪，**尚未打包成功**：自测两次中止，原因已修，待重跑 `build.sh full`） |
-| 最近一次完整真机验收 | **0.2.0 骨架包**：`PASS 23 / WARN 3 / FAIL 0`，`status=0`，监听 `192.168.0.114:3080`，HTTP 200 |
+| 包版本 | **0.5.0**（已打包并装上真机，2026-10-27） |
+| 最近一次完整真机验收 | **0.5.0 完整包**：`probe/05` **33 PASS / 1 WARN / 0 FAIL**，`probe/07` **10 PASS / 0 FAIL**；监听 `192.168.0.114:3080`，健康检查 `ready=true` |
 | 数据落点 | 共享目录 `dsh/workspace/.dsh-home`（**跨卸载存活**，已实测） |
-| 运行时 | 自带 Node 24 + `@deepseek-ai/dsh@0.2.1-rc.3`（钉版理由见 [PLAN §3.2](PLAN.md)） |
-| 尺寸 | 完整包约 990MB，安装后约 866MB / 63053 个文件 |
+| 运行时 | 自带 Node 24（`v24.22.1`）+ `@deepseek-ai/dsh@0.2.1-rc.3`（钉版理由见 [PLAN §3.2](PLAN.md)） |
+| 尺寸 | 完整包约 990MB；装完的真实占用待测（`du /var/apps/dsh` 只有 132K，因为 `target/` 是软链，要 `du /vol1/@appcenter/dsh`） |
 | 已知问题 | 见 [docs/ISSUES.md](docs/ISSUES.md) |
 
 > 侧载包**没有 CLI 升级通道**：`appcenter-cli install-fpk` 对已装应用只回一句 `is installed`。
