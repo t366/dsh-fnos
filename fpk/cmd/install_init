@@ -1,0 +1,55 @@
+#!/bin/bash
+# install_init — 解包前执行。只做检查，不改系统。
+# 硬失败写 TRIM_TEMP_LOGFILE 并 exit 1，应用中心会以对话框展示。
+
+set -u
+
+PKGVAR="${TRIM_PKGVAR:-/tmp}"
+LOGFILE="$PKGVAR/info.log"
+ERRFILE="${TRIM_TEMP_LOGFILE:-}"
+MIN_FREE_MB=1500
+
+mkdir -p "$PKGVAR" 2>/dev/null
+log() { printf '%s [%s] install_init: %s\n' "$(date '+%F %T')" "$$" "$*" >>"$LOGFILE" 2>/dev/null; }
+warn() { log "WARN: $*"; }
+fail() {
+  log "FAIL: $*"
+  [ -n "$ERRFILE" ] && printf '%s\n' "$*" >"$ERRFILE" 2>/dev/null
+  exit 1
+}
+
+log "begin (ver=${TRIM_APPVER:-?})"
+
+# ---- 架构 ----
+ARCH="$(uname -m 2>/dev/null)"
+case "$ARCH" in
+  x86_64|amd64) log "arch=$ARCH" ;;
+  *) fail "本应用只提供 x86_64 版本，当前架构为 ${ARCH:-未知}。" ;;
+esac
+
+# ---- 磁盘 ----
+VOL="${TRIM_APPDEST_VOL:-/}"
+AVAIL_MB="$(df -Pk "$VOL" 2>/dev/null | awk 'NR==2{print int($4/1024)}')"
+if [ -n "${AVAIL_MB:-}" ]; then
+  log "volume=$VOL avail=${AVAIL_MB}MB"
+  if [ "$AVAIL_MB" -lt "$MIN_FREE_MB" ]; then
+    fail "安装位置可用空间不足：需要至少 ${MIN_FREE_MB}MB，当前 ${AVAIL_MB}MB。请清理空间或改选其它存储空间。"
+  fi
+else
+  warn "无法读取 $VOL 的可用空间，跳过磁盘检查"
+fi
+
+# ---- 沙箱能力（仅告警，不阻断）----
+if grep -q landlock /sys/kernel/security/lsm 2>/dev/null; then
+  log "landlock: enabled"
+else
+  warn "内核 LSM 未列出 landlock；dsh 的沙箱可能退化为无隔离模式"
+fi
+if command -v bwrap >/dev/null 2>&1; then
+  log "bubblewrap: $(command -v bwrap)"
+else
+  warn "未找到 bubblewrap；dsh 将回落到 landlock 后端"
+fi
+
+log "ok"
+exit 0

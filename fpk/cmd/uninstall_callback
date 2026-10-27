@@ -1,0 +1,54 @@
+#!/bin/bash
+# uninstall_callback — 卸载清理后执行。
+# 默认保留数据；只有用户在卸载向导里显式选「全部删除」才清空。
+#
+# 注意：@appdata / @appconf 会被 fnOS 直接删掉，所以「保留」实际是靠
+# 共享目录里的 .dsh-home 生效的（见 PLAN §2.8）。这里的 keep 分支不需要做事，
+# 真正需要认真处理的是 purge —— 必须把共享目录里的副本也删掉，
+# 否则重装时 install_callback 会把旧 API Key 又捞回来，"全部删除"就成了谎话。
+
+set -u
+
+SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+APPNAME="dsh"
+PKGVAR="${TRIM_PKGVAR:-/tmp}"
+LOGFILE="$PKGVAR/info.log"
+
+log() { printf '%s [%s] uninstall_callback: %s\n' "$(date '+%F %T')" "$$" "$*" >>"$LOGFILE" 2>/dev/null; }
+
+resolve_share() {
+  local first p
+  first="${TRIM_DATA_SHARE_PATHS:-}"
+  p="${first%%:*}"
+  if [ -n "$p" ] && [ -d "$p" ]; then printf '%s' "$p"; return 0; fi
+  for p in "/var/apps/$APPNAME/shares/workspace" \
+           "$SELF_DIR/../shares/workspace" \
+           "$SELF_DIR/../share/workspace"; do
+    [ -d "$p" ] && { printf '%s' "$p"; return 0; }
+  done
+  return 1
+}
+
+PURGE=0
+case "${dsh_purge_data:-}" in
+  purge|PURGE|Purge|true|TRUE|True|1|yes|on) PURGE=1 ;;
+esac
+
+SHARE="$(resolve_share || true)"
+SHARE_HOME=""
+[ -n "$SHARE" ] && SHARE_HOME="$SHARE/.dsh-home"
+
+if [ "$PURGE" = "1" ]; then
+  log "purge: 删除用户数据"
+  [ -n "$SHARE_HOME" ] && rm -rf "$SHARE_HOME" 2>/dev/null
+  rm -rf "$PKGVAR/dsh-home" 2>/dev/null
+  # 入口跳转器的状态与密钥也一起清：留着的话重装后旧 cookie 仍然能通过校验，
+  # 而“全部删除”应该连“已配对的设备”这层信任一起收回。
+  rm -f "$PKGVAR/dsh-url.txt" "$PKGVAR/dsh.pid" \
+        "$PKGVAR/launcher.json" "$PKGVAR/launcher.pid" \
+        "$PKGVAR/launcher-secret" 2>/dev/null
+else
+  log "keep: 数据保留在 ${SHARE_HOME:-$PKGVAR/dsh-home}"
+fi
+
+exit 0

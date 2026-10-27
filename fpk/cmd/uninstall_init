@@ -1,0 +1,10 @@
+#!/bin/bash
+# uninstall_init — 卸载前执行。只负责停进程，不删任何数据。
+
+set -u
+
+CMD_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+PKGVAR="${TRIM_PKGVAR:-/tmp}"
+
+"$CMD_DIR/main" stop >>"$PKGVAR/info.log" 2>&1
+exit 0

@@ -1,0 +1,10 @@
+#!/bin/bash
+# config_init — 配置变更前执行。先停服务，config_callback 里再拉起。
+
+set -u
+
+CMD_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+PKGVAR="${TRIM_PKGVAR:-/tmp}"
+
+"$CMD_DIR/main" stop >>"$PKGVAR/info.log" 2>&1
+exit 0

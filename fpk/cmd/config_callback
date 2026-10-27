@@ -1,0 +1,83 @@
+#!/bin/bash
+# config_callback — 配置变更后执行。合并新值、重写 settings、重启。
+#
+# 约定：向导里留空表示「保持不变」，避免用户只想改绑定地址却把 API Key 清空。
+
+set -u
+
+APPNAME="dsh"
+CMD_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+PKGVAR="${TRIM_PKGVAR:-/tmp}"
+PKGETC="${TRIM_PKGETC:-}"
+DSH_USER="${TRIM_USERNAME:-dsh}"
+DSH_GROUP="${TRIM_GROUPNAME:-$DSH_USER}"
+LOGFILE="$PKGVAR/info.log"
+ERRFILE="${TRIM_TEMP_LOGFILE:-}"
+SETTINGS="$PKGETC/settings.conf"
+
+log() { printf '%s [%s] config_callback: %s\n' "$(date '+%F %T')" "$$" "$*" >>"$LOGFILE" 2>/dev/null; }
+fail() {
+  log "FAIL: $*"
+  [ -n "$ERRFILE" ] && printf '%s\n' "$*" >"$ERRFILE" 2>/dev/null
+  exit 1
+}
+
+get_conf() {
+  [ -f "$SETTINGS" ] || return 1
+  grep -E "^$1=" "$SETTINGS" 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '\r'
+}
+
+OLD_PORT="$(get_conf DSH_PORT || true)"
+OLD_BIND="$(get_conf DSH_BIND || true)"
+OLD_KEY="$(get_conf DSH_API_KEY || true)"
+
+PORT="${OLD_PORT:-3080}"
+BIND="${dsh_bind:-}"
+[ -n "$BIND" ] || BIND="${OLD_BIND:-auto}"
+KEY="${dsh_apikey:-}"
+[ -n "$KEY" ] || KEY="$OLD_KEY"
+
+log "config: port=$PORT bind=$BIND key=$([ -n "$KEY" ] && echo set || echo empty)"
+
+umask 077
+{
+  printf 'DSH_PORT=%s\n' "$PORT"
+  printf 'DSH_BIND=%s\n' "$BIND"
+  printf 'DSH_API_KEY=%s\n' "$KEY"
+} >"$SETTINGS" || fail "无法写入配置文件 $SETTINGS"
+chmod 600 "$SETTINGS" 2>/dev/null
+
+# 同步副本到共享目录。不这么做的后果很隐蔽：用户在设置里改了绑定地址或 Key，
+# 共享目录里的副本还是旧值，下一次卸载重装会把旧值「恢复」回来。
+resolve_share() {
+  local first p
+  first="${TRIM_DATA_SHARE_PATHS:-}"
+  p="${first%%:*}"
+  if [ -n "$p" ] && [ -d "$p" ]; then printf '%s' "$p"; return 0; fi
+  for p in "/var/apps/$APPNAME/shares/workspace" \
+           "$CMD_DIR/../shares/workspace" \
+           "$CMD_DIR/../share/workspace"; do
+    [ -d "$p" ] && { printf '%s' "$p"; return 0; }
+  done
+  return 1
+}
+SHARE="$(resolve_share || true)"
+if [ -n "$SHARE" ] && [ -d "$SHARE/.dsh-home" ]; then
+  if cp -f "$SETTINGS" "$SHARE/.dsh-home/settings.conf" 2>/dev/null; then
+    chmod 600 "$SHARE/.dsh-home/settings.conf" 2>/dev/null
+    log "settings: 副本已同步"
+  else
+    log "WARN: 无法同步配置副本到 $SHARE/.dsh-home"
+  fi
+fi
+
+if [ "$(id -u)" = "0" ] && [ -n "$DSH_USER" ]; then
+  chown "$DSH_USER:$DSH_GROUP" "$SETTINGS" 2>/dev/null
+  [ -n "$SHARE" ] && chown "$DSH_USER:$DSH_GROUP" "$SHARE/.dsh-home/settings.conf" 2>/dev/null
+fi
+
+"$CMD_DIR/main" start >>"$LOGFILE" 2>&1 || fail "配置已保存，但应用启动失败。请检查监听地址是否为有效的局域网 IP。"
+"$CMD_DIR/main" status || fail "配置已保存，但进程未在运行，详见应用日志。"
+
+log "ok"
+exit 0

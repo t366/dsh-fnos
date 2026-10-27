@@ -1,0 +1,170 @@
+#!/bin/bash
+# install_callback — 解包后执行。初始化数据目录与配置。
+# 幂等：重复执行不会破坏已有数据（API Key 会被新值覆盖，为空则保留旧值）。
+#
+# 关键设计（2026-10-27 真机实测得出）：
+#   fnOS 卸载会把 @appdata / @appconf / @apphome 整个删掉，uninstall_callback
+#   里写的「保留」只是空转——轮不到它执行，目录已经没了。
+#   唯一能跨卸载存活的是 data-share（共享目录），所以：
+#     · dsh-home（会话、凭据）直接放在 共享目录/.dsh-home
+#     · settings.conf 在 @appconf 写一份，另有副本在 共享目录/.dsh-home/settings.conf
+#   重装后即使 @appconf 是空的，也能从副本把绑定地址与 API Key 恢复回来。
+
+set -u
+
+APPNAME="dsh"
+SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+
+PKGVAR="${TRIM_PKGVAR:-}"
+PKGETC="${TRIM_PKGETC:-}"
+APPDEST="${TRIM_APPDEST:-}"
+DSH_USER="${TRIM_USERNAME:-dsh}"
+DSH_GROUP="${TRIM_GROUPNAME:-$DSH_USER}"
+ERRFILE="${TRIM_TEMP_LOGFILE:-}"
+
+[ -n "$PKGVAR" ] || { echo "缺少 TRIM_PKGVAR" >"$ERRFILE" 2>/dev/null; exit 1; }
+[ -n "$PKGETC" ] || { echo "缺少 TRIM_PKGETC" >"$ERRFILE" 2>/dev/null; exit 1; }
+
+LOGFILE="$PKGVAR/info.log"
+SETTINGS="$PKGETC/settings.conf"
+
+mkdir -p "$PKGVAR" "$PKGETC" 2>/dev/null
+log() { printf '%s [%s] install_callback: %s\n' "$(date '+%F %T')" "$$" "$*" >>"$LOGFILE" 2>/dev/null; }
+fail() {
+  log "FAIL: $*"
+  [ -n "$ERRFILE" ] && printf '%s\n' "$*" >"$ERRFILE" 2>/dev/null
+  exit 1
+}
+
+# ---------------------------------------------------------------- 数据落点
+
+resolve_share() {
+  local first p
+  first="${TRIM_DATA_SHARE_PATHS:-}"
+  p="${first%%:*}"
+  if [ -n "$p" ] && [ -d "$p" ]; then printf '%s' "$p"; return 0; fi
+  for p in "/var/apps/$APPNAME/shares/workspace" \
+           "$SELF_DIR/../shares/workspace" \
+           "$SELF_DIR/../share/workspace"; do
+    [ -d "$p" ] && { printf '%s' "$p"; return 0; }
+  done
+  return 1
+}
+
+SHARE="$(resolve_share || true)"
+DSH_HOME="$PKGVAR/dsh-home"
+MIRROR=""
+
+if [ -n "$SHARE" ]; then
+  # 卸载会把共享目录改成 chmod 000（实测 d---------），重装后我们自己修回来。
+  # 修不了（不归我们所有）就退回 @appdata，至少应用还能跑，只是升级会丢数据。
+  if [ ! -x "$SHARE" ]; then
+    chmod a+rx "$SHARE" 2>/dev/null
+  fi
+  if [ -x "$SHARE" ] && [ -w "$SHARE" ] && mkdir -p "$SHARE/.dsh-home" 2>/dev/null; then
+    DSH_HOME="$SHARE/.dsh-home"
+    MIRROR="$DSH_HOME/settings.conf"
+    log "home: $DSH_HOME（共享目录，可跨卸载）"
+  else
+    log "WARN: 共享目录不可用（$SHARE），数据退回 $DSH_HOME，卸载重装会丢失"
+  fi
+else
+  log "WARN: 未找到共享目录，数据退回 $DSH_HOME，卸载重装会丢失"
+fi
+
+get_conf() { # 先读 @appconf 的现行配置，没有就读共享目录里的副本
+  local f v
+  for f in "$SETTINGS" "$MIRROR"; do
+    [ -n "$f" ] || continue
+    [ -f "$f" ] || continue
+    v="$(grep -E "^$1=" "$f" 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '\r')"
+    if [ -n "$v" ]; then printf '%s' "$v"; return 0; fi
+  done
+  return 1
+}
+
+log "begin (ver=${TRIM_APPVER:-?})"
+
+# ---- 运行时自检 ----
+RUNTIME="$APPDEST/runtime"
+if [ -f "$RUNTIME/app/node_modules/@deepseek-ai/dsh/package.json" ]; then
+  log "runtime: dsh"
+elif [ -f "$RUNTIME/stub/server.mjs" ]; then
+  log "runtime: stub（M1 骨架，未捆绑 dsh）"
+else
+  log "runtime: 缺失"
+  fail "安装包不完整：未找到运行时目录。请重新下载安装包。"
+fi
+
+# ---- 数据目录 ----
+mkdir -p "$DSH_HOME" 2>/dev/null || fail "无法创建数据目录 $DSH_HOME"
+chmod 700 "$DSH_HOME" 2>/dev/null
+
+# ---- 配置：保留已有 Key / 绑定地址，其余按向导值 ----
+OLD_KEY="$(get_conf DSH_API_KEY || true)"
+NEW_KEY="${dsh_apikey:-}"
+[ -n "$NEW_KEY" ] || NEW_KEY="$OLD_KEY"
+
+# 留空 = 保留上次的值（重装/修复安装不该把用户指定的地址冲掉）
+# 显式 auto = 重新自动探测
+OLD_BIND="$(get_conf DSH_BIND || true)"
+BIND="${dsh_bind:-}"
+case "$BIND" in
+  "")       BIND="${OLD_BIND:-auto}" ;;
+  auto|AUTO) BIND="auto" ;;
+esac
+
+# 端口默认 3080（与 manifest.service_port、app/ui/config 保持一致）。
+# dsh_port 只给自测脚本用，正常安装不会传。
+PORT="${dsh_port:-3080}"
+case "$PORT" in ''|*[!0-9]*) PORT=3080 ;; esac
+[ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || PORT=3080
+
+umask 077
+{
+  printf 'DSH_PORT=%s\n' "$PORT"
+  printf 'DSH_BIND=%s\n' "$BIND"
+  printf 'DSH_API_KEY=%s\n' "$NEW_KEY"
+} >"$SETTINGS" || fail "无法写入配置文件 $SETTINGS"
+chmod 600 "$SETTINGS" 2>/dev/null
+log "settings: port=$PORT bind=$BIND key=$([ -n "$NEW_KEY" ] && echo set || echo empty)"
+
+# ---- 副本：让配置能跨卸载存活 ----
+if [ -n "$MIRROR" ]; then
+  if cp -f "$SETTINGS" "$MIRROR" 2>/dev/null; then
+    chmod 600 "$MIRROR" 2>/dev/null
+    log "settings: 副本已写入 $MIRROR"
+  else
+    log "WARN: 无法写入配置副本 $MIRROR"
+  fi
+fi
+
+# ---- 清掉上一轮遗留的进程状态 ----
+# 只在确认进程已不在时才清：如果应用还在跑（某些升级路径可能不先 stop），
+# 删掉 launcher.json 会让正在服务的跳转器立刻变成「正在启动」白屏。
+STALE_RUNNING=0
+for f in dsh.pid launcher.pid; do
+  [ -f "$PKGVAR/$f" ] || continue
+  pid="$(cut -d' ' -f1 "$PKGVAR/$f" 2>/dev/null)"
+  case "${pid:-}" in ''|*[!0-9]*) ;; *)
+    kill -0 "$pid" 2>/dev/null && STALE_RUNNING=1
+    ;;
+  esac
+done
+if [ "$STALE_RUNNING" = "1" ]; then
+  log "stale: 检测到应用仍在运行，保留 pidfile 与入口 state（start 会自行修复）"
+else
+  rm -f "$PKGVAR/dsh.pid" "$PKGVAR/launcher.pid" \
+        "$PKGVAR/launcher.json" "$PKGVAR/dsh-url.txt" 2>/dev/null
+  log "stale: 已清理旧 pidfile 与入口 state"
+fi
+
+# ---- 属主：确保应用用户可读写（脚本可能以 root 执行）----
+if [ "$(id -u)" = "0" ] && [ -n "$DSH_USER" ]; then
+  chown -R "$DSH_USER:$DSH_GROUP" "$DSH_HOME" 2>/dev/null
+  chown "$DSH_USER:$DSH_GROUP" "$SETTINGS" "$LOGFILE" 2>/dev/null
+  log "chown: $DSH_USER:$DSH_GROUP"
+fi
+
+log "ok"
+exit 0

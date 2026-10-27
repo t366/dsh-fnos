@@ -1,0 +1,55 @@
+#!/bin/bash
+# upgrade_init — 解包前执行（这是唯一能干净清理旧文件的窗口）。
+#
+# 关键：覆盖安装通常只是叠文件、不清旧文件。不先移走 runtime，新旧版本会混在一起。
+# 这里用「改名而非删除」，万一新包解包失败还能在 upgrade_callback 里恢复。
+
+set -u
+
+CMD_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+PKGVAR="${TRIM_PKGVAR:-/tmp}"
+APPDEST="${TRIM_APPDEST:-}"
+LOGFILE="$PKGVAR/info.log"
+ERRFILE="${TRIM_TEMP_LOGFILE:-}"
+
+log() { printf '%s [%s] upgrade_init: %s\n' "$(date '+%F %T')" "$$" "$*" >>"$LOGFILE" 2>/dev/null; }
+fail() {
+  log "FAIL: $*"
+  [ -n "$ERRFILE" ] && printf '%s\n' "$*" >"$ERRFILE" 2>/dev/null
+  exit 1
+}
+
+log "begin (${TRIM_OLD_APPVER:-?} -> ${TRIM_APPVER:-?})"
+
+# ---- 1. 防御性停机（不假设系统已经帮我们停了）----
+"$CMD_DIR/main" stop >>"$LOGFILE" 2>&1
+
+# ---- 2. 数据快照（M1 最小版；M2 会换成完整备份 + 轮转）----
+DSH_HOME="$PKGVAR/dsh-home"
+if [ -d "$DSH_HOME" ]; then
+  BACKUP="$PKGVAR/upgrade-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+  if tar -czf "$BACKUP" -C "$PKGVAR" dsh-home 2>/dev/null; then
+    log "backup: $BACKUP ($(du -h "$BACKUP" 2>/dev/null | awk '{print $1}'))"
+  else
+    # 备份失败不阻断 M1 升级，但必须留痕，M2 会改成硬失败
+    log "WARN: backup failed, continuing (M1)"
+  fi
+fi
+
+# ---- 3. 移走旧运行时 ----
+RUNTIME="$APPDEST/runtime"
+if [ -d "$RUNTIME" ]; then
+  rm -rf "$RUNTIME.old" 2>/dev/null
+  mv "$RUNTIME" "$RUNTIME.old" 2>/dev/null || fail "无法移走旧运行时，升级中止以避免新旧文件混杂。"
+  log "runtime: moved to $RUNTIME.old"
+fi
+
+# ---- 4. 记录升级前状态（供 upgrade_callback 与 doctor 使用）----
+{
+  printf 'FROM=%s\n' "${TRIM_OLD_APPVER:-unknown}"
+  printf 'TO=%s\n' "${TRIM_APPVER:-unknown}"
+  printf 'AT=%s\n' "$(date '+%F %T')"
+} >"$PKGVAR/upgrade-state.conf" 2>/dev/null
+
+log "ok"
+exit 0

@@ -1,0 +1,23 @@
+[
+  {
+    "stepTitle": "修改设置",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "修改后会重启应用。端口固定为 3080，如需更换请先卸载后重新安装。"
+      },
+      {
+        "type": "password",
+        "field": "dsh_apikey",
+        "label": "DeepSeek API Key（留空表示保持不变）",
+        "initValue": ""
+      },
+      {
+        "type": "text",
+        "field": "dsh_bind",
+        "label": "监听地址（留空或填 auto 表示自动探测）",
+        "initValue": ""
+      }
+    ]
+  }
+]

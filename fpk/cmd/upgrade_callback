@@ -1,0 +1,71 @@
+#!/bin/bash
+# upgrade_callback — 解包后执行。校验新运行时、恢复配置、启动。
+
+set -u
+
+CMD_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+PKGVAR="${TRIM_PKGVAR:-/tmp}"
+PKGETC="${TRIM_PKGETC:-}"
+APPDEST="${TRIM_APPDEST:-}"
+LOGFILE="$PKGVAR/info.log"
+ERRFILE="${TRIM_TEMP_LOGFILE:-}"
+SETTINGS="$PKGETC/settings.conf"
+RUNTIME="$APPDEST/runtime"
+
+log() { printf '%s [%s] upgrade_callback: %s\n' "$(date '+%F %T')" "$$" "$*" >>"$LOGFILE" 2>/dev/null; }
+fail() {
+  log "FAIL: $*"
+  [ -n "$ERRFILE" ] && printf '%s\n' "$*" >"$ERRFILE" 2>/dev/null
+  exit 1
+}
+
+log "begin (${TRIM_APPVER:-?})"
+
+# ---- 1. 新运行时到位了吗？没到位就恢复旧的 ----
+if [ -f "$RUNTIME/app/node_modules/@deepseek-ai/dsh/package.json" ] \
+   || [ -f "$RUNTIME/stub/server.mjs" ]; then
+  rm -rf "$RUNTIME.old" 2>/dev/null
+  log "runtime: new runtime in place, dropped .old"
+elif [ -d "$RUNTIME.old" ]; then
+  rm -rf "$RUNTIME" 2>/dev/null
+  mv "$RUNTIME.old" "$RUNTIME" 2>/dev/null
+  fail "升级包解包失败（新运行时缺失），已恢复上一版运行时。请重试升级。"
+else
+  fail "升级后找不到运行时，且没有可恢复的旧版本。请重新安装应用。"
+fi
+
+# ---- 2. 配置必须还在（系统在升级过程中可能重写 etc）----
+if [ ! -f "$SETTINGS" ]; then
+  log "settings missing, recreating with defaults"
+  mkdir -p "$PKGETC" 2>/dev/null
+  umask 077
+  {
+    printf 'DSH_PORT=%s\n' "3080"
+    printf 'DSH_BIND=%s\n' "auto"
+    printf 'DSH_API_KEY=%s\n' ""
+  } >"$SETTINGS" 2>/dev/null
+fi
+
+# ---- 3. 凭据仍在？（保住 .credentials.yaml 用户就不用重新登录）----
+if [ -f "$PKGVAR/dsh-home/.credentials.yaml" ]; then
+  log "credentials: kept"
+else
+  log "credentials: absent (首次安装或已清除)"
+fi
+
+# ---- 4. 冒烟 ----
+NODE_BIN=""
+for c in "$RUNTIME/node/bin/node" /var/apps/nodejs_v24/target; do
+  [ -x "$c/bin/node" ] && { NODE_BIN="$c/bin/node"; break; }
+  [ -x "$c" ] && { NODE_BIN="$c"; break; }
+done
+if [ -n "$NODE_BIN" ]; then
+  log "node: $("$NODE_BIN" -v 2>&1 | head -n1)"
+fi
+
+# ---- 5. 启动并验证 ----
+"$CMD_DIR/main" start >>"$LOGFILE" 2>&1 || fail "升级后启动失败，详见应用日志（$LOGFILE）。"
+"$CMD_DIR/main" status || fail "升级后进程未在运行，详见应用日志（$LOGFILE）。"
+
+log "ok"
+exit 0

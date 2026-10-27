@@ -1,0 +1,21 @@
+[
+  {
+    "stepTitle": "数据处理",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "默认保留数据目录（会话、凭据、设置），重新安装后可继续使用。选择删除后无法恢复。"
+      },
+      {
+        "type": "radio",
+        "field": "dsh_purge_data",
+        "label": "数据处理",
+        "initValue": "keep",
+        "options": [
+          { "label": "保留会话、凭据与设置（推荐）", "value": "keep" },
+          { "label": "全部删除，不可恢复", "value": "purge" }
+        ]
+      }
+    ]
+  }
+]

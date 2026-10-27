@@ -1,0 +1,26 @@
+# 打包产物
+*.fpk
+*.tar.gz
+app.tgz
+
+# 运行时（由 build.sh full 在构建机现场生成，体积约 900MB，永不入库）
+fpk/app/runtime/node/
+fpk/app/runtime/app/
+
+# 依赖
+node_modules/
+
+# 本地临时沙箱（selftest / 手工验证会在这里建目录）
+.ts/
+.t*/
+.v/
+.u/
+.leftover-*/
+
+# 编辑器与系统
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp

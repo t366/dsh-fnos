@@ -1,0 +1,593 @@
+#!/bin/bash
+# ============================================================================
+# dsh on fnOS — 生命周期主脚本（cmd/main）
+#
+# 契约：main start|stop|status
+#   退出码 0 = 成功 / status 表示运行中
+#          1 = 失败
+#          3 = status 表示未运行
+#
+# 设计要点（都由真机实测得出，改动前先读 PLAN.md §2.3 / §4.2）：
+#   1. fnOS 没有 systemd 集成，start 必须自己后台化 → 用 setsid 建独立进程组
+#   2. dsh 会 fork pty / shell 子进程 → stop 必须整组回收，否则留孤儿
+#   3. dsh 拒绝 0.0.0.0 → 必须绑具体网卡地址，且网络可能晚于应用就绪 → 先等地址
+#   4. PATH 上的 node 是 v22.19，不满足 dsh 的 >=24.9 → 必须探测绝对路径
+#   5. 所有路径从 TRIM_* 派生，不硬编码 /vol1
+# ============================================================================
+
+set -u
+
+APPNAME="dsh"
+SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+
+# ---- 路径（一律从 TRIM_* 派生；缺省值只用于本机调试） ----
+APPDEST="${TRIM_APPDEST:-$SELF_DIR/../target}"
+PKGVAR="${TRIM_PKGVAR:-$SELF_DIR/../var}"
+PKGETC="${TRIM_PKGETC:-$SELF_DIR/../etc}"
+
+RUNTIME="$APPDEST/runtime"
+
+# dsh-home 放在共享目录里，卸载重装才不丢会话与凭据（实测 @appdata 会被连根删掉）。
+# 与 install_callback 用同一套推导顺序，两处改一处就得改另一处。
+_share="${TRIM_DATA_SHARE_PATHS:-}"
+_share="${_share%%:*}"
+if [ -z "$_share" ] || [ ! -d "$_share" ]; then
+  for _p in "$SELF_DIR/../shares/workspace" "$SELF_DIR/../share/workspace" \
+            "/var/apps/$APPNAME/shares/workspace"; do
+    [ -d "$_p" ] && { _share="$_p"; break; }
+  done
+fi
+if [ -n "$_share" ]; then
+  DSH_HOME="$_share/.dsh-home"
+else
+  DSH_HOME="$PKGVAR/dsh-home"
+fi
+unset _share _p
+
+PIDFILE="$PKGVAR/dsh.pid"
+LOGFILE="$PKGVAR/info.log"
+SETTINGS="$PKGETC/settings.conf"
+URLFILE="$PKGVAR/dsh-url.txt"
+
+# 入口跳转器（方案 B）：service_port 归它，dsh 退到 service_port+1。
+# 目的：点图标即进，同时保留令牌栅栏（未配对的设备只能看到粘贴页）。
+LAUNCHER_PIDFILE="$PKGVAR/launcher.pid"
+LAUNCHER_ENTRY="$RUNTIME/launcher/server.mjs"
+STATEFILE="$PKGVAR/launcher.json"
+INTERNAL_PORT=""
+ERRFILE="${TRIM_TEMP_LOGFILE:-}"
+
+DEFAULT_PORT=3080
+ADDR_TIMEOUT=60
+PORT_TIMEOUT=45
+STOP_TIMEOUT=15
+
+mkdir -p "$PKGVAR" 2>/dev/null
+
+# ---------------------------------------------------------------- 工具
+
+log() { printf '%s [%s] %s\n' "$(date '+%F %T')" "$$" "$*" >>"$LOGFILE" 2>/dev/null; }
+
+say() {
+  log "ERROR: $*"
+  if [ -n "$ERRFILE" ]; then
+    printf '%s\n' "$*" >"$ERRFILE" 2>/dev/null
+  fi
+}
+
+die() { say "$*"; exit 1; }
+
+now() { date +%s; }
+
+is_ipv4() {
+  printf '%s' "${1:-}" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || return 1
+  local IFS=. o
+  for o in $1; do
+    [ "$o" -ge 0 ] 2>/dev/null && [ "$o" -le 255 ] 2>/dev/null || return 1
+  done
+  return 0
+}
+
+ver_ge() { # $1 >= $2 ？（点分比较，不能用字符串比：24.19 < 24.9）
+  [ -n "${1:-}" ] || return 1
+  [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
+}
+
+# ---------------------------------------------------------------- 配置
+
+get_conf() { # $1=key
+  [ -f "$SETTINGS" ] || return 1
+  grep -E "^$1=" "$SETTINGS" 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '\r'
+}
+
+load_settings() {
+  DSH_PORT="$(get_conf DSH_PORT || true)"
+  DSH_BIND="$(get_conf DSH_BIND || true)"
+  DSH_API_KEY="$(get_conf DSH_API_KEY || true)"
+
+  [ -n "${DSH_PORT:-}" ] || DSH_PORT="$DEFAULT_PORT"
+  [ -n "${DSH_BIND:-}" ] || DSH_BIND="auto"
+
+  case "$DSH_PORT" in
+    ''|*[!0-9]*) DSH_PORT="$DEFAULT_PORT" ;;
+  esac
+  if [ "$DSH_PORT" -lt 1 ] || [ "$DSH_PORT" -gt 65535 ]; then
+    DSH_PORT="$DEFAULT_PORT"
+  fi
+}
+
+# ---------------------------------------------------------------- 网络
+
+detect_lan_ip() {
+  local ip
+  ip="$(ip route get 1.1.1.1 2>/dev/null \
+        | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+  if [ -z "$ip" ]; then
+    ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  fi
+  printf '%s' "$ip"
+}
+
+resolve_bind() {
+  local want="${1:-auto}"
+  case "$want" in
+    ""|auto|AUTO) detect_lan_ip ;;
+    *) printf '%s' "$want" ;;
+  esac
+}
+
+wait_for_addr() { # $1=ip
+  local ip="$1" deadline
+  # 回环地址一定在，没必要等（selftest / 单机调试会绑 127.0.0.1）
+  case "$ip" in 127.*|::1|localhost) return 0 ;; esac
+  # 没有 ip 命令就无从判断，不因此拒绝启动（真绑不上时端口等待会兜住）
+  if ! command -v ip >/dev/null 2>&1; then
+    log "WARN: 没有 ip 命令，跳过地址就绪检查（$ip）"
+    return 0
+  fi
+  deadline=$(( $(now) + ADDR_TIMEOUT ))
+  while :; do
+    if ip -4 addr show 2>/dev/null | grep -qF "inet $ip/"; then
+      return 0
+    fi
+    [ "$(now)" -ge "$deadline" ] && return 1
+    sleep 2
+  done
+}
+
+wait_for_port() { # $1=ip $2=port $3=timeout $4=pid
+  local ip="$1" port="$2" deadline=$(( $(now) + ${3:-PORT_TIMEOUT} )) watch="${4:-}"
+  while :; do
+    if (exec 3<>"/dev/tcp/$ip/$port") 2>/dev/null; then
+      return 0
+    fi
+    if [ -n "$watch" ] && ! kill -0 "$watch" 2>/dev/null; then
+      return 1
+    fi
+    [ "$(now)" -ge "$deadline" ] && return 1
+    sleep 1
+  done
+}
+
+# ---------------------------------------------------------------- 运行时
+
+find_node() {
+  local c v
+  # 0) 仅供 selftest / 排障：DSH_NODE 直接指定（跳过版本校验，别在正式环境用）
+  if [ -n "${DSH_NODE:-}" ] && [ -x "$DSH_NODE" ]; then
+    printf '%s' "$DSH_NODE"
+    return 0
+  fi
+  # 1) bundled（v1 默认形态）
+  if [ -x "$RUNTIME/node/bin/node" ]; then
+    printf '%s' "$RUNTIME/node/bin/node"
+    return 0
+  fi
+  # 2) fnOS 应用中心的 nodejs（走 /var/apps 软链，天然不依赖卷号）
+  for c in /var/apps/nodejs_v24/target /var/apps/nodejs_v23/target \
+           /vol*/@appcenter/nodejs_v24 /vol*/@appcenter/nodejs_v23; do
+    [ -x "$c/bin/node" ] || continue
+    v="$("$c/bin/node" -v 2>/dev/null | sed 's/^v//')"
+    if ver_ge "$v" "24.9.0"; then
+      printf '%s' "$c/bin/node"
+      return 0
+    fi
+  done
+  return 1
+}
+
+find_dsh_entry() {
+  local pkg="$RUNTIME/app/node_modules/@deepseek-ai/dsh/package.json" rel
+  [ -f "$pkg" ] || return 1
+  rel="$("$NODE_BIN" -e '
+    try {
+      const p = require(process.argv[1]);
+      let b = p.bin;
+      if (typeof b === "string") b = { dsh: b };
+      process.stdout.write((b && (b.dsh || Object.values(b)[0])) || "");
+    } catch (e) { process.stdout.write(""); }
+  ' "$pkg" 2>/dev/null)"
+  [ -n "$rel" ] || return 1
+  local entry
+  entry="$(dirname "$pkg")/$rel"
+  [ -f "$entry" ] || return 1
+  printf '%s' "$entry"
+}
+
+detect_mode() {
+  if [ -f "$RUNTIME/app/node_modules/@deepseek-ai/dsh/package.json" ]; then
+    printf 'dsh'
+  elif [ -f "$RUNTIME/stub/server.mjs" ]; then
+    printf 'stub'
+  else
+    printf 'none'
+  fi
+}
+
+resolve_workspace() {
+  local p first
+  first="${TRIM_DATA_SHARE_PATHS:-}"
+  p="${first%%:*}"
+  if [ -n "$p" ] && [ -d "$p" ]; then printf '%s' "$p"; return 0; fi
+  # 回退：应用中心会给出 TRIM_DATA_SHARE_PATHS，手工调用时没有。
+  # 实测安装后共享目录落在 $ROOT/shares/workspace（复数），
+  # 单数 share/ 是早期猜测，留作兼容。
+  for p in "$SELF_DIR/../shares/workspace" "$SELF_DIR/../share/workspace" \
+           "/var/apps/$APPNAME/shares/workspace" "/var/apps/$APPNAME/share/workspace"; do
+    [ -d "$p" ] && { printf '%s' "$p"; return 0; }
+  done
+  printf '%s' "$DSH_HOME"
+}
+
+rotate_log() {
+  [ -f "$LOGFILE" ] || return 0
+  local sz
+  sz="$(stat -c %s "$LOGFILE" 2>/dev/null || echo 0)"
+  if [ "${sz:-0}" -gt 5242880 ]; then
+    mv -f "$LOGFILE" "$LOGFILE.1" 2>/dev/null
+  fi
+}
+
+# ---------------------------------------------------------------- 进程
+
+read_pidf() { # $1=pidfile
+  [ -f "$1" ] || return 1
+  local pid pgid
+  read -r pid pgid <"$1" 2>/dev/null || return 1
+  case "${pid:-}" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$pid" -gt 1 ] || return 1
+  printf '%s %s\n' "$pid" "${pgid:-$pid}"
+}
+
+read_pid() { read_pidf "$PIDFILE"; }
+
+is_runningf() { # $1=pidfile
+  local pid pgid pair cmd p seen=1
+  pair="$(read_pidf "$1")" || return 1
+  read -r pid pgid <<<"$pair" || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  cmd="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+  [ -n "$cmd" ] || return 1
+
+  # PID 复用防护：cmdline 里必须出现我们的运行时路径。
+  #
+  # 但同一个目录有两种写法，必须都认：
+  #   ${TRIM_APPDEST}  = /vol1/@appcenter/dsh   ← 应用中心调用时
+  #   $SELF_DIR/../target = /var/apps/dsh/target ← 手工/脚本调用时（软链）
+  # 只比一种写法 → 进程明明在跑，status 却返回 3。2026-10-27 真机实测踩到：
+  # start 由应用中心触发（记的是 /vol1/... 的 cmdline），而 05-verify 手工
+  # 调 status（算的是 /var/apps/...），校验失败被误判成「未运行」。
+  # 后果不是日志难看：status=3 会让应用中心以为没起来，可能重复 start / 拒绝 stop。
+  for p in "$RUNTIME" "$APPDEST" \
+           "$(readlink -f "$RUNTIME" 2>/dev/null)" \
+           "$(readlink -f "$APPDEST" 2>/dev/null)"; do
+    [ -n "${p:-}" ] || continue
+    case "$cmd" in *"$p"*) seen=0; break ;; esac
+  done
+  return "$seen"
+}
+
+is_running() { is_runningf "$PIDFILE"; }
+
+# 后台拉起一个进程并记下 pid/pgid。
+# 为什么不让 setsid 直接跑 node：`setsid node &` 拿到的 $! 有时是 setsid 自己的
+# pid（它先 fork 再 exec），那个进程转瞬即逝，pidfile 会记到死 pid → status 永远 3。
+# 做法：让新会话里的 bash 自报 $$ 再 exec，pid 全程不变，且它就是进程组首进程。
+SPAWN_PID=""
+spawn_bg() { # $1=pidfile 其余=要执行的命令
+  local pf="$1"; shift
+  local pidtmp="$pf.tmp" launcher pid pgid no_setsid=0
+  rm -f "$pidtmp" 2>/dev/null
+
+  if command -v setsid >/dev/null 2>&1; then
+    setsid bash -c 'echo $$ > "$1"; shift; exec "$@"' _ "$pidtmp" "$@" >>"$LOGFILE" 2>&1 &
+    launcher=$!
+  else
+    # 没有 setsid 就没有独立进程组，stop 只能单进程杀（pty 子进程可能残留）
+    bash -c 'echo $$ > "$1"; shift; exec "$@"' _ "$pidtmp" "$@" >>"$LOGFILE" 2>&1 &
+    launcher=$!
+    no_setsid=1
+    log "WARN: setsid 不可用，进程组回收能力受限"
+  fi
+
+  local i=0
+  while [ "$i" -lt 50 ]; do
+    if [ -s "$pidtmp" ]; then pid="$(cat "$pidtmp" 2>/dev/null)"; break; fi
+    sleep 0.1
+    i=$((i + 1))
+  done
+  case "${pid:-}" in ''|*[!0-9]*) pid="$launcher" ;; esac
+  rm -f "$pidtmp" 2>/dev/null
+
+  # 有 setsid 才记录独立 pgid；否则记自身 pid，避免 stop 时误杀调用者的进程组
+  if [ "$no_setsid" = "1" ]; then
+    pgid="$pid"
+  else
+    pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')"
+    case "${pgid:-}" in ''|*[!0-9]*) pgid="$pid" ;; esac
+  fi
+  printf '%s %s\n' "$pid" "$pgid" >"$pf"
+  chmod 600 "$pf" 2>/dev/null
+  SPAWN_PID="$pid"
+}
+
+do_stopf() { # $1=pidfile $2=label
+  local pf="$1" label="${2:-proc}" pid pgid pair
+  if ! pair="$(read_pidf "$pf")"; then
+    rm -f "$pf" 2>/dev/null
+    log "stop($label): no pidfile, nothing to do"
+    return 0
+  fi
+  read -r pid pgid <<<"$pair" || { rm -f "$pf" 2>/dev/null; return 0; }
+  case "${pgid:-}" in ''|*[!0-9]*) pgid="$pid" ;; esac
+  [ "$pgid" -gt 1 ] 2>/dev/null || pgid="$pid"
+
+  # 绝不误杀自己所在的进程组
+  local mypgid
+  mypgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
+  if [ -n "$mypgid" ] && [ "$pgid" = "$mypgid" ]; then
+    log "stop($label): refuse to kill own process group ($pgid)"
+    rm -f "$pf" 2>/dev/null
+    return 0
+  fi
+
+  if kill -0 "$pid" 2>/dev/null; then
+    log "stop($label): TERM pid=$pid pgid=$pgid"
+    kill -TERM -- "-$pgid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
+    local deadline=$(( $(now) + STOP_TIMEOUT ))
+    while kill -0 "$pid" 2>/dev/null && [ "$(now)" -lt "$deadline" ]; do sleep 0.5; done
+    if kill -0 "$pid" 2>/dev/null; then
+      log "stop($label): TERM timeout, KILL group $pgid"
+      kill -KILL -- "-$pgid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null
+      sleep 0.5
+    fi
+  fi
+
+  rm -f "$pf" 2>/dev/null
+  log "stop($label): done"
+  return 0
+}
+
+# ---------------------------------------------------------------- 入口跳转器
+
+start_launcher() { # $1=bind
+  local bind="$1" lpid t
+  [ -f "$LAUNCHER_ENTRY" ] || die "缺少入口跳转器：$LAUNCHER_ENTRY（请重新安装应用）"
+  spawn_bg "$LAUNCHER_PIDFILE" "$NODE_BIN" "$LAUNCHER_ENTRY" \
+    --host "$bind" --port "$DSH_PORT" --state "$STATEFILE"
+  lpid="$SPAWN_PID"
+  if ! wait_for_port "$bind" "$DSH_PORT" "$PORT_TIMEOUT" "$lpid"; then
+    t="$(tail -n 10 "$LOGFILE" 2>/dev/null)"
+    do_stopf "$LAUNCHER_PIDFILE" launcher
+    say "$(printf '入口跳转器启动失败（端口 %s 未就绪）。最近的日志：\n%s' "$DSH_PORT" "$t")"
+    exit 1
+  fi
+  if ! kill -0 "$lpid" 2>/dev/null; then
+    t="$(tail -n 10 "$LOGFILE" 2>/dev/null)"
+    do_stopf "$LAUNCHER_PIDFILE" launcher
+    say "$(printf '入口跳转器启动后立即退出（端口 %s 可能被占用）。最近的日志：\n%s' "$DSH_PORT" "$t")"
+    exit 1
+  fi
+  log "start: launcher pid=$lpid on $bind:$DSH_PORT"
+}
+
+# 跳转器从 state 文件读「这一轮的入口 URL」。dsh 每次启动都会换 token，
+# 所以 dsh 起来之后必须立刻刷新这个文件，否则用户点图标会被送到旧 token。
+write_state() { # $1=bind
+  local url=""
+  [ -s "$URLFILE" ] && url="$(head -n1 "$URLFILE" 2>/dev/null)"
+  [ -n "$url" ] || url="http://$1:$INTERNAL_PORT/"
+  printf '{"url":"%s","host":"%s","port":%s,"since":%s}\n' \
+    "$url" "$1" "$INTERNAL_PORT" "$(now)" >"$STATEFILE"
+  chmod 600 "$STATEFILE" 2>/dev/null
+}
+
+do_start() {
+  load_settings
+
+  MODE="$(detect_mode)"
+  [ "$MODE" = "none" ] && die "运行时缺失：$RUNTIME 下既没有 dsh，也没有 stub。请重新安装应用。"
+
+  NODE_BIN="$(find_node)" || die "未找到可用的 Node 运行时（需要 >= 24.9）。请重新安装应用，或在应用中心安装 Node.js v24。"
+  export NODE_BIN
+
+  local bind
+  bind="$(resolve_bind "${DSH_BIND:-auto}")"
+  [ -n "$bind" ] || die "无法探测监听地址。请在应用设置里手动指定本机的一个局域网 IP。"
+  is_ipv4 "$bind" || die "监听地址不合法：$bind"
+  [ "$bind" = "0.0.0.0" ] && die "dsh 不接受 0.0.0.0，请填写具体网卡地址（例如 192.168.1.10）。"
+
+  wait_for_addr "$bind" || die "等待地址 $bind 超时（${ADDR_TIMEOUT}s）。可能是网络尚未就绪，请稍后重试，或在应用设置里改为其它地址。"
+
+  # 端口分工：service_port（图标、checkport 用的那个）归跳转器，
+  # dsh 退到 service_port+1。这样点图标进来的是跳转器，能自动带令牌。
+  local dsh_port="$DSH_PORT"
+  if [ "$MODE" = "dsh" ]; then
+    INTERNAL_PORT=$((DSH_PORT + 1))
+    if [ "$INTERNAL_PORT" -gt 65535 ]; then
+      die "端口 $DSH_PORT 没有可用的内部端口（dsh 需要 $((DSH_PORT + 1))）。请在应用设置里改成 3080 之类的值。"
+    fi
+    dsh_port="$INTERNAL_PORT"
+  fi
+
+  # 已经在跑：两个进程都在 → 幂等返回；
+  # dsh 在、跳转器掉了（崩溃/被杀）→ 只补起跳转器，不重启 dsh（那会打断会话）。
+  if is_running; then
+    if [ "$MODE" = "dsh" ] && ! is_runningf "$LAUNCHER_PIDFILE"; then
+      log "start: dsh 在运行但跳转器不在，补起跳转器"
+      start_launcher "$bind"
+      write_state "$bind"
+      return 0
+    fi
+    log "start: already running"
+    return 0
+  fi
+
+  # 共享目录可能被上一次卸载改成 000，建不出来就退回 @appdata（能跑，代价是升级丢会话）
+  if ! mkdir -p "$DSH_HOME" 2>/dev/null; then
+    log "WARN: 无法创建 $DSH_HOME，退回 $PKGVAR/dsh-home"
+    DSH_HOME="$PKGVAR/dsh-home"
+    mkdir -p "$DSH_HOME" 2>/dev/null || die "无法创建数据目录 $DSH_HOME"
+  fi
+  chmod 700 "$DSH_HOME" 2>/dev/null
+  rotate_log
+
+  # 记下当前日志长度：抓 token 时只看本次启动新增的部分。
+  # 否则 grep 整个日志会命中上一次的 URL —— 那个 token 早已随旧进程失效。
+  local logoff=0
+  [ -f "$LOGFILE" ] && logoff="$(stat -c %s "$LOGFILE" 2>/dev/null || echo 0)"
+  case "${logoff:-}" in ''|*[!0-9]*) logoff=0 ;; esac
+
+  local workdir
+  workdir="$(resolve_workspace)"
+  cd "$workdir" 2>/dev/null || cd "$PKGVAR" || die "无法进入工作目录"
+  log "start: cwd=$workdir node=$NODE_BIN bind=$bind dsh_port=$dsh_port home=$DSH_HOME"
+
+  local entry
+  local -a cmd
+  if [ "$MODE" = "dsh" ]; then
+    entry="$(find_dsh_entry)" || die "运行时损坏：找不到 dsh 的入口文件。"
+    cmd=("$entry" --profile web --host "$bind" --port "$dsh_port" --no-open)
+    export DSH_HOME
+    # dsh 会往 HOME 下写缓存/凭据，不设就可能落到 /root 或应用用户的默认家目录（不可写）
+    export HOME="$DSH_HOME"
+    if [ -n "${DSH_API_KEY:-}" ]; then export DEEPSEEK_API_KEY="$DSH_API_KEY"; fi
+    log "start: mode=dsh entry=$entry"
+    # 跳转器先起：它占着 service_port，端口冲突要在这一步就暴露，
+    # 而不是等 dsh 起来后用户点图标才发现打不开。
+    rm -f "$STATEFILE" 2>/dev/null
+    start_launcher "$bind"
+  else
+    entry="$RUNTIME/stub/server.mjs"
+    cmd=("$entry" --host "$bind" --port "$dsh_port")
+    log "start: mode=stub entry=$entry"
+  fi
+
+  local pid pgid
+  spawn_bg "$PIDFILE" "$NODE_BIN" "${cmd[@]}"
+  pid="$SPAWN_PID"
+  read -r _ pgid <"$PIDFILE" 2>/dev/null || pgid="$pid"
+
+  if ! wait_for_port "$bind" "$dsh_port" "$PORT_TIMEOUT" "$pid"; then
+    log "start: port not ready, aborting"
+    local tail_log
+    tail_log="$(tail -n 15 "$LOGFILE" 2>/dev/null)"
+    do_stop
+    say "$(printf '应用启动失败（端口 %s 未就绪）。最近的日志：\n%s' "$dsh_port" "$tail_log")"
+    exit 1
+  fi
+
+  # 端口通了不代表我们起来了：端口可能本来就被别的进程（或上次没杀干净的实例）占着，
+  # 而新进程一启动就 EADDRINUSE 退出。这里必须确认记录的那个 pid 还活着。
+  if ! kill -0 "$pid" 2>/dev/null; then
+    local who tail_log
+    who="$(ss -ltnp 2>/dev/null | grep -E ":${dsh_port}[[:space:]]" | head -n1)"
+    tail_log="$(tail -n 15 "$LOGFILE" 2>/dev/null)"
+    do_stop
+    say "$(printf '应用启动失败：进程启动后立即退出（端口 %s 可能已被占用）。\n占用者：%s\n最近的日志：\n%s' "$dsh_port" "${who:-未知}" "$tail_log")"
+    exit 1
+  fi
+
+  # dsh 只在日志里打印带 token 的入口 URL，抓出来存一份（600）
+  if [ "$MODE" = "dsh" ]; then
+    local url="" waited=0
+    # 日志可能比端口晚一拍，最多再等 3s
+    while [ "$waited" -lt 30 ]; do
+      url="$(tail -c +"$((logoff + 1))" "$LOGFILE" 2>/dev/null \
+             | grep -oE 'https?://[^ "'"'"']*token=[A-Za-z0-9_-]+' | tail -n1)"
+      [ -n "$url" ] && break
+      sleep 0.1
+      waited=$((waited + 1))
+    done
+    if [ -n "$url" ]; then
+      printf '%s\n' "$url" >"$URLFILE"
+      chmod 600 "$URLFILE" 2>/dev/null
+      log "start: url=$(printf '%s' "$url" | sed -E 's/(token=)[A-Za-z0-9_-]+/\1***/')"
+    else
+      # 不致命：服务已起来，只是没抓到入口链接（dsh 可能改了输出格式）。
+      # state 仍要写，但写的是不带令牌的裸地址 —— 跳转器会把用户送到 dsh 的 401 页，
+      # 比停在「正在启动」的白屏更容易自查。
+      log "WARN: 本次启动未从日志抓到 token URL，请在 $LOGFILE 里手工查找 token="
+    fi
+    write_state "$bind"
+    log "start: state=$(sed -E 's#(token=)[A-Za-z0-9_-]+#\1***#g' "$STATEFILE" 2>/dev/null)"
+  fi
+
+  log "start: ok pid=$pid pgid=$pgid"
+  return 0
+}
+
+do_stop() {
+  do_stopf "$PIDFILE" dsh
+  do_stopf "$LAUNCHER_PIDFILE" launcher
+  rm -f "$STATEFILE" 2>/dev/null
+  return 0
+}
+
+do_status() {
+  # 只用 kill -0 + /proc 校验，不碰 HTTP、不读日志（要便宜）
+  if ! is_running; then
+    return 3
+  fi
+  # dsh 在跑但跳转器死了 = 点图标打不开，必须报「异常」而不是「运行中」，
+  # 否则应用中心会认为一切正常，永远不会去修。
+  if [ "$(detect_mode)" = "dsh" ] && ! is_runningf "$LAUNCHER_PIDFILE"; then
+    return 1
+  fi
+  return 0
+}
+
+# ---------------------------------------------------------------- 入口
+
+case "${1:-}" in
+  start)
+    do_start
+    exit 0
+    ;;
+  stop)
+    do_stop
+    exit 0
+    ;;
+  status)
+    do_status
+    exit $?
+    ;;
+  restart)
+    do_stop
+    do_start
+    exit 0
+    ;;
+  url)
+    # 只读：打印本次启动的入口令牌地址（给「配对这台设备」用）
+    if [ -s "$URLFILE" ]; then
+      head -n1 "$URLFILE"
+      exit 0
+    fi
+    say "还没有入口地址：应用可能未启动，或本次启动没抓到 token。看看 $LOGFILE"
+    exit 1
+    ;;
+  *)
+    say "用法: $0 {start|stop|status|restart|url}"
+    exit 1
+    ;;
+esac

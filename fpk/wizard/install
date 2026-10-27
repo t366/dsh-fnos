@@ -1,0 +1,23 @@
+[
+  {
+    "stepTitle": "DeepSeek Harness",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "安装后会以专用用户 dsh 运行，仅监听局域网地址。首次启动会生成一个带 token 的访问链接，可在应用日志中查看。"
+      },
+      {
+        "type": "password",
+        "field": "dsh_apikey",
+        "label": "DeepSeek API Key",
+        "initValue": ""
+      },
+      {
+        "type": "text",
+        "field": "dsh_bind",
+        "label": "监听地址（留空或填 auto 表示自动探测）",
+        "initValue": "auto"
+      }
+    ]
+  }
+]

@@ -1,0 +1,16 @@
+# 全部按 LF 入库：这些脚本最终跑在 Linux（fnOS）上，
+# CRLF 会让 #!/bin/bash 变成 `bash\r` 而直接报 "bad interpreter"。
+* text=auto eol=lf
+
+# 显式钉死可执行脚本的类型
+*.sh   text eol=lf
+*.mjs  text eol=lf
+*.js   text eol=lf
+*.py   text eol=lf
+*.md   text eol=lf
+manifest text eol=lf
+
+# 二进制
+*.png  binary
+*.PNG  binary
+*.ico  binary
