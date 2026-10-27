@@ -180,4 +180,35 @@ cat /var/apps/dsh/var/launcher.json       # 本轮令牌与绑定地址
 ss -ltnp | grep 308                        # 端口有没有被占
 ```
 
-完整条目见 [ISSUES.md](ISSUES.md)，安装/升级界面步骤见 [../fpk/README.md](../fpk/README.md)。
+## 附：`EADDRINUSE 3080` / `appcenter-cli start` 报 10330
+
+**症状**：应用中心弹「入口跳转器启动后立即退出（端口 3080 可能已被占用）」，
+或 `appcenter-cli start dsh` 只回 `code 10330`；`var/dsh.pid` 不存在。
+
+**含义**：3080 被**别人的**进程占着——通常是之前以 root 手工 `start` 过
+（`probe/07` 老版本会这样）。`kill` 由应用用户执行时对 root 进程是 EPERM，
+旧代码静默失败还删 pidfile，于是「pidfile 没了 + status 说没运行 + 端口仍被占」同时成立。
+
+```bash
+# 1. 看是谁
+ss -ltnp | grep -E ':308[01]'
+
+# 2. 按端口反查 pid 并结束（root 身份执行）
+for p in $(ss -ltnp | grep -E ':308[01]' | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u); do
+  echo "kill $p → $(ps -o user=,comm= -p "$p" 2>/dev/null)"
+  kill -TERM "$p"
+done
+sleep 2
+ss -ltnp | grep -E ':308[01]' || echo "端口已释放"
+
+# 3. 让平台自己启动（平台状态才正确）
+appcenter-cli start dsh
+
+# 4. 确认身份是 dsh，不是 root
+ps -o user=,args= -p "$(cut -d' ' -f1 /var/apps/dsh/var/dsh.pid)" 2>/dev/null || echo "没起来"
+```
+
+若第 2 步后端口仍被占，`kill -KILL` 再试；仍不行说明进程在 D 状态（等 IO），
+只能重启 NAS。**别用 `cmd/main start` 以 root 手工兜底**——那正是这个问题本身。
+
+完整条目见 [ISSUES.md](ISSUES.md)（F16 / F18），安装/升级界面步骤见 [../fpk/README.md](../fpk/README.md)。
