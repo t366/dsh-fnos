@@ -362,6 +362,43 @@ dsh 也以 root 启动，于是 `dsh-home` 里新生成了 root 所有的 `-wal`
 **真机待确认**：装上新包后应用中心是否出现停止按钮。若仍然没有，说明平台不是靠回环探测，
 要往「第三方应用不出启停」这个方向查。
 
+### F18 stop 报成功，其实进程还活着 → start 只会回 10330
+
+**现象**（2026-10-27，真机）：
+
+```
+appcenter-cli stop dsh                  → [Info] stop success
+appcenter-cli start dsh                 → [Error] code 10330
+ls /var/apps/dsh/var/dsh.pid            → No such file
+```
+
+**根因**：`do_stopf()` 用 `kill -TERM/-KILL` 结束进程，但**不检查结果**。
+应用用户（`dsh`）杀不掉 root 起的进程（EPERM），`kill` 静默失败，
+脚本却照样 `rm -f` pidfile 并 `log "... done"`、`return 0`。于是：
+
+1. 平台认为应用已停止；2. `status` 因为 pidfile 没了也报「未运行」；
+3. 下一次 `start` 时 3080/3081 仍被那个 root 进程占着，新进程 EADDRINUSE 退出；
+4. 平台只把「启动失败」映射成错误码 **10330**，对话框里没有任何原因。
+
+这三个状态（pidfile 没了、status 说没运行、端口还被占）是排查时最难受的组合，
+而它是由我们自己的 stop 造出来的。
+
+**为什么会有 root 进程**：F16——`probe/07` 曾以 root 跑过一次 `start`。
+先把进程起来、再让应用用户去停，就必然踩到这个点。
+
+**修法**：
+
+- `do_stopf()` 收尾用 `is_alive()`（排除僵尸态 `Z`）复核；仍活着就 `log FAILED`、
+  把「停止失败：xxx 仍在运行，当前身份 yyy 没有权限」写进 `TRIM_TEMP_LOGFILE`、
+  **保留 pidfile**、`return 1`；
+- `do_stop()` 汇总子调用的结果，非 0 时**不再删 `launcher.json`**；
+- `stop` 子命令 `exit $?`，让 `appcenter-cli stop` 能如实报错；
+- `start` 的 EADDRINUSE 文案补一句「若占用者是别人（如 root 手工启动）留下的，
+  先用那个身份停掉它，否则应用中心只会给一个 10330」。
+
+**修不了的**：平台把失败统一成 10330，我们无法改变它的错误码，
+只能保证原因写进它展示的那段文字（`TRIM_TEMP_LOGFILE`）与 `info.log`。
+
 
 ---
 

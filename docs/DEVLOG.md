@@ -258,6 +258,29 @@ dsh-home root 文件     ← 1 个（probe/07 以 root 重启造成，F16 的现
 顺带确认 `appcenter-cli` 1.0.2 有 `start` / `stop` / `status`，
 「没有停止按钮时怎么重启」终于有确定答案，不用再靠 `su` 兜底。
 
+## 阶段 13：10330 不是谜，是 stop 撒了谎（21:31）
+
+按 F16 的清理步骤执行时，`appcenter-cli stop dsh` 回 `stop success`，
+紧接着 `appcenter-cli start dsh` 回 `something wrong with appcenter: code 10330`，
+而且 `var/dsh.pid` 已经不存在了。
+
+链条很清楚：那个 dsh 是**我在 root 下用 probe/07 起的**；应用用户 `dsh` 的 `kill`
+对它是 EPERM，静默失败；`do_stopf()` 不看结果，照样删 pidfile、记 done、`return 0`。
+于是「pidfile 没了 + status 报未运行 + 端口还被占着」同时成立，`start` 必然 EADDRINUSE，
+平台把它折叠成 10330，对话框里一个字的原因都没有。
+
+**F18 修法**（都在 `cmd/main`）：
+
+- 新增 `is_alive()`（排除 `Z` 僵尸态），stop 收尾据此复核；
+- 仍活着 → 记 FAILED、写清「谁占着、当前身份没权限」到 `TRIM_TEMP_LOGFILE`、保留 pidfile、`return 1`；
+- `do_stop()` 汇总结果，失败时不再删 `launcher.json`（留着比清空更有助排查）；
+- `stop` 子命令 `exit $?`；start 的 EADDRINUSE 文案补上「别人留下的进程」这一句。
+
+自测 `32 通过 / 22 跳过 / 0 失败`（stop 相关 6 项全绿）。
+
+教训：**「停止」这种破坏性操作必须验证结果**。原代码只保证「发了信号」，
+不保证「进程没了」——而平台只会给一个错误码，用户和我都会先怀疑平台。
+
 ## 下一步
 
 1. **瘦身**（一次性收益）：改用 `install_dep_apps: nodejs_v24` + 只打包 `node_modules`，

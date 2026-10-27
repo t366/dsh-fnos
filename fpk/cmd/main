@@ -337,6 +337,16 @@ spawn_bg() { # $1=pidfile 其余=要执行的命令
   SPAWN_PID="$pid"
 }
 
+# kill -0 对僵尸进程也返回成功。stop 的收尾判定必须排除僵尸，
+# 否则「进程已退出但还没被回收」会被误报成「没杀掉」。
+is_alive() { # $1=pid
+  kill -0 "$1" 2>/dev/null || return 1
+  local st
+  st="$(awk '{print $3}' "/proc/$1/stat" 2>/dev/null)"
+  [ "${st:-}" = "Z" ] && return 1
+  return 0
+}
+
 do_stopf() { # $1=pidfile $2=label
   local pf="$1" label="${2:-proc}" pid pgid pair
   if ! pair="$(read_pidf "$pf")"; then
@@ -367,6 +377,18 @@ do_stopf() { # $1=pidfile $2=label
       kill -KILL -- "-$pgid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null
       sleep 0.5
     fi
+  fi
+
+  # 权限不足时 kill 是静默失败（应用用户杀不掉 root 起的进程）。
+  # 以前这里照样删 pidfile、回 0、报 done：平台以为停了，start 时端口还占着，
+  # 只丢回来一个 10330，信息量为零（2026-10-27 真机踩到）。
+  if is_alive "$pid"; then
+    local who
+    who="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null | cut -c1-160)"
+    log "stop($label): FAILED pid=$pid still alive user=$(id -un) cmd=$who"
+    say "$(printf '停止失败：%s（pid %s）仍在运行，当前身份 %s 没有权限结束它。\n先用启动它的身份停掉（例如 root 下 kill %s），再重新启动应用。' \
+      "$label" "$pid" "$(id -un)" "$pid")"
+    return 1
   fi
 
   rm -f "$pf" 2>/dev/null
@@ -517,7 +539,7 @@ do_start() {
     who="$(ss -ltnp 2>/dev/null | grep -E ":${dsh_port}[[:space:]]" | head -n1)"
     tail_log="$(tail -n 15 "$LOGFILE" 2>/dev/null)"
     do_stop
-    say "$(printf '应用启动失败：进程启动后立即退出（端口 %s 可能已被占用）。\n占用者：%s\n最近的日志：\n%s' "$dsh_port" "${who:-未知}" "$tail_log")"
+    say "$(printf '应用启动失败：进程启动后立即退出（端口 %s 可能已被占用）。\n占用者：%s\n若占用者是别人（例如 root 下手工启动过）留下的，先用那个身份停掉它，\n否则应用中心只会给一个 10330，看不出原因。\n最近的日志：\n%s' "$dsh_port" "${who:-未知}" "$tail_log")"
     exit 1
   fi
 
@@ -552,10 +574,13 @@ do_start() {
 }
 
 do_stop() {
-  do_stopf "$PIDFILE" dsh
-  do_stopf "$LAUNCHER_PIDFILE" launcher
-  rm -f "$STATEFILE" 2>/dev/null
-  return 0
+  local rc=0
+  do_stopf "$PIDFILE" dsh || rc=1
+  do_stopf "$LAUNCHER_PIDFILE" launcher || rc=1
+  # 只在真的停干净后才清 state：留着 state 至少能让 healthz 说清楚「上次的有令牌地址」，
+  # 而 pidfile 被误删 + state 被清 + 端口仍被占，是排查时最难受的组合。
+  [ "$rc" -eq 0 ] && rm -f "$STATEFILE" 2>/dev/null
+  return $rc
 }
 
 do_status() {
@@ -580,7 +605,7 @@ case "${1:-}" in
     ;;
   stop)
     do_stop
-    exit 0
+    exit $?
     ;;
   status)
     do_status
