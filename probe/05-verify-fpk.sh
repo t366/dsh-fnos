@@ -210,12 +210,19 @@ fi
 # 手工启动（无 TRIM_DATA_SHARE_PATHS）走的是回退路径，必须与安装时那次启动
 # 指向同一个 workspace。若指向两份，症状是「装完打开 dsh，历史会话全没了」——
 # 其实文件都在，只是换了目录，而且其中一份会随卸载消失。
-INST_HOME="$(grep -oE 'home=[^ ]+' "$ROOT/var/info.log" 2>/dev/null | head -n1 | cut -d= -f2-)"
+#
+# 2026-10-28 修：原来取 `head -n1`，即日志里**最早**一条 home=。info.log 跨版本累积，
+# 0.5.0 早期那次启动写过 @appdata 下的路径，于是拿它跟当前软链比，永远报 FAIL
+# （实测：两套目录都不存在，.dsh-home 只有一份，属纯误报）。
+# 改为取最后一条（最近一次 start），并且要求「那个目录真的存在」才算分裂。
+INST_HOME="$(grep -oE 'home=[^ ]+' "$ROOT/var/info.log" 2>/dev/null | tail -n1 | cut -d= -f2-)"
 FB_DIR="$(readlink -f "$ROOT/shares/workspace" 2>/dev/null || true)"
 if [ -n "${INST_HOME:-}" ] && [ -n "${FB_DIR:-}" ]; then
   INST_DIR="$(dirname "$INST_HOME")"
   if [ "$(readlink -f "$INST_DIR" 2>/dev/null)" = "$FB_DIR" ]; then
     ok "手工启动与安装启动指向同一 workspace" "$FB_DIR"
+  elif [ ! -d "$INST_DIR" ]; then
+    ok "只有一套 workspace（日志里的旧路径已不存在）" "旧记录：$INST_DIR"
   else
     bad "存在两套 workspace" \
         "安装时：$INST_DIR / 回退：$FB_DIR —— 会出现「会话凭空消失」"

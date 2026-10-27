@@ -71,10 +71,13 @@ function loadSecret() {
     const s = fs.readFileSync(SECRET_FILE, 'utf8').trim();
     if (s.length >= 32) {
       // 自愈：只在「文件已存在」这条路径上才知道它可能是旧版本留下的。
-      // 早期版本用更宽的权限创建过这个文件，而下面写新文件时才 chmod，
-      // 于是 700 会一直跟着（probe/05 会报 WARN）。这里读到就顺手收紧一次。
+      // 早期版本用 700 创建过这个文件，而写新文件时才 chmod，于是 700 会一直跟着
+      // （probe/05 报 `WARN 配对密钥权限是 700`）。
+      //
+      // 2026-10-28 修：原判断是 `mode & 0o077`，只覆盖 group/other 位。
+      // 700 的 group/other 恰好都是 0，条件恒为假 → 从不收紧。必须整段比对 0o777。
       try {
-        if ((fs.statSync(SECRET_FILE).mode & 0o077) !== 0) fs.chmodSync(SECRET_FILE, 0o600);
+        if ((fs.statSync(SECRET_FILE).mode & 0o777) !== 0o600) fs.chmodSync(SECRET_FILE, 0o600);
       } catch {}
       return (SECRET = Buffer.from(s, 'hex'));
     }

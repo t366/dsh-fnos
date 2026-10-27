@@ -1,5 +1,5 @@
 appname="dsh"
-version="0.6.0"
+version="0.6.1"
 display_name="DeepSeek Harness"
 desc="DeepSeek 开源的 agent harness（dsh）。以本地 Web 界面提供 AI 编程智能体，支持工具调用、终端与文件操作，仅限局域网访问。"
 source="thirdparty"
@@ -18,4 +18,4 @@ checkport="true"
 service_port="3080"
 disable_authorization_path="true"
 
-changelog="0.6.0：修好启停链路的三处问题。入口在回环地址上也监听，平台据此判定「运行中」，应用中心的停止按钮恢复；stop 会核实进程真的退出，停不掉时给出原因（不再只回错误码 10330）；配对密钥权限自动收敛为 600。安装后没有任何需要手动改的配置。"
+changelog="0.6.1：修掉 0.6.0 里一处没生效的修复。配对密钥权限的自动收敛条件写错了（只检查了组/其他用户位，700 这种多出执行位的情况漏判），导致旧密钥的 700 权限一直没被纠正。本次改为整段比对，首次启动即收敛为 600。功能与 0.6.0 一致，没有其它变化。"
