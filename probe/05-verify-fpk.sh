@@ -78,29 +78,45 @@ if [ -n "${TARGET:-}" ] && [ -d "$TARGET" ]; then
     fi
   done
 
-  # 入口图标的真实像素密度：详情页在 ~56px 处显示，高 DPI 屏需要 ≥128 的源才不发虚。
-  # 若这里读到 64，说明安装器把图标降采样了——那是平台行为，只能靠提高对比度补救。
-  ICON_PATH="$TARGET/${ICON64:-ui/images/icon_64.png}"
-  if [ -f "$ICON_PATH" ] && command -v node >/dev/null 2>&1; then
+  # 图标像素密度：详情页实测在 ~96 物理像素处显示图标。三处图标都要够大，
+  # 少一处就会出现「换了图还是糊」（0.6.1~0.6.3 连踩三次：先是没换设计，
+  # 再是只给了 ui/ 下的图，最后才发现详情页读的是包根那张）。
+  ICON_NODE=""
+  if command -v node >/dev/null 2>&1; then
     ICON_NODE="$(command -v node)"
     [ -x "$TARGET/runtime/node/bin/node" ] && ICON_NODE="$TARGET/runtime/node/bin/node"
-    PX="$("$ICON_NODE" -e '
+  fi
+  pxof() {
+    if [ -z "${ICON_NODE:-}" ] || [ ! -f "$1" ]; then printf ''; return 0; fi
+    "$ICON_NODE" -e '
 const fs=require("fs");
 try{const b=fs.readFileSync(process.argv[1]);
   if(b.subarray(1,4).toString()!=="PNG"){console.log("notpng");process.exit(0)}
   console.log(b.readUInt32BE(16)+"x"+b.readUInt32BE(20));
-}catch(e){console.log("err")}' "$ICON_PATH" 2>/dev/null)"
-    case "${PX:-}" in
-      64x64)          warn "入口图标是 64×64" "详情页显示约 56px，高 DPI 屏会拉伸；已靠高对比设计兜底" ;;
-      *x*)            ICONW="${PX%%x*}"
-                      if [ "${ICONW:-0}" -ge 128 ] 2>/dev/null; then
-                        ok "入口图标像素充足" "$PX"
-                      else
-                        warn "入口图标偏小" "$PX（建议 ≥128）"
-                      fi ;;
-      *)              warn "读不到入口图标尺寸" "$PX" ;;
+}catch(e){console.log("err")}' "$1" 2>/dev/null
+  }
+  ICON_PATH="$TARGET/${ICON64:-ui/images/icon_64.png}"
+  PX="$(pxof "$ICON_PATH")"
+  case "${PX:-}" in
+    64x64)          warn "入口图标是 64×64" "详情页显示约 96 物理像素，会被拉伸；需要 ≥128 的源" ;;
+    *x*)            ICONW="${PX%%x*}"
+                    if [ "${ICONW:-0}" -ge 128 ] 2>/dev/null; then
+                      ok "入口图标像素充足" "$PX"
+                    else
+                      warn "入口图标偏小" "$PX（建议 ≥128）"
+                    fi ;;
+    *)              warn "读不到入口图标尺寸" "${PX:-空}" ;;
+  esac
+  # 包根图标：0.6.3 机型上实测详情页读的就是它，64 会被拉到 ~96
+  for f in ICON.PNG ICON_256.PNG; do
+    Q="$(pxof "$ROOT/$f")"
+    [ -n "${Q:-}" ] || continue
+    case "$Q" in
+      64x64)  warn "包图标 $f 是 64×64" "详情页读它并拉到 ~96 物理像素，这是发虚的直接原因" ;;
+      *x*)    ok "包图标 $f" "$Q" ;;
+      *)      warn "包图标 $f 读不到尺寸" "$Q" ;;
     esac
-  fi
+  done
   if [ -f "$TARGET/runtime/app/node_modules/@deepseek-ai/dsh/package.json" ]; then
     ok "检测到捆绑的 dsh" "模式 = dsh（完整包）"
     DV="$(node -e 'try{console.log(require(process.argv[1]).version)}catch(e){}' \

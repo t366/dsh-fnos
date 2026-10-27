@@ -1,5 +1,5 @@
 appname="dsh"
-version="0.6.3"
+version="0.6.4"
 display_name="DeepSeek Harness"
 desc="DeepSeek 开源的 agent harness（dsh）。以本地 Web 界面提供 AI 编程智能体，支持工具调用、终端与文件操作，仅限局域网访问。"
 source="thirdparty"
@@ -18,4 +18,4 @@ checkport="true"
 service_port="3080"
 disable_authorization_path="true"
 
-changelog="0.6.3：图标改为深蓝底白鲸（DeepSeek 品牌色 #4D6BFE），并把主体占满画布。此前是白底浅蓝鲸，在应用中心的浅灰底上边界几乎融进背景，加上鲸鱼眼睛、腹部镂空这类细节在小尺寸下塌成灰噪点，看起来就一直发虚——问题在对比度与细节密度，不在像素数量。新设计只有「深蓝圆角块 + 白色剪影」两层，56px 下轮廓依旧干净。四处图标文件同步替换。"
+changelog="0.6.4：图标这次改到了地方。应用中心详情页那个图标实测约 96 物理像素，读的是包根的 ICON.PNG——它一直是 64×64（官方规范如此），64 拉到 96 必然发虚，前面换设计、换高分辨率入口图都没用上。现在包根图标同样给 256×256，四处图标统一，交给平台自己缩。install 若提示图标规格不符，说明安装器硬校验 64，退回 0.6.3 即可，数据不受影响。"
