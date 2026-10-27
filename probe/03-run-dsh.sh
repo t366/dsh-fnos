@@ -87,7 +87,7 @@ case "$ACTION" in
   start)
     if is_running; then
       echo "已在运行 (pid $(cat "$PIDFILE"))。URL："
-      grep -oE 'https?://[^ "'"'"']*token=[A-Za-z0-9_-]+' "$LOGFILE" 2>/dev/null | head -n1
+      grep -oE 'https?://[^ "'"'"']*token=[^ "'"'"'&]+' "$LOGFILE" 2>/dev/null | head -n1
       exit 0
     fi
 
@@ -138,7 +138,7 @@ case "$ACTION" in
     for i in $(seq 1 60); do
       sleep 1
       kill -0 "$PID" 2>/dev/null || break
-      URL="$(grep -oE 'https?://[^ "'"'"']*token=[A-Za-z0-9_-]+' "$LOGFILE" 2>/dev/null | head -n1)"
+      URL="$(grep -oE 'https?://[^ "'"'"']*token=[^ "'"'"'&]+' "$LOGFILE" 2>/dev/null | head -n1)"
       [ -n "$URL" ] && break
     done
 
@@ -185,7 +185,7 @@ case "$ACTION" in
 
   url)
     U="$(cat "$URLFILE" 2>/dev/null)"
-    if [ -n "${U:-}" ]; then echo "$U"; else grep -oE 'https?://[^ "'"'"']*token=[A-Za-z0-9_-]+' "$LOGFILE" 2>/dev/null | head -n1; fi
+    if [ -n "${U:-}" ]; then echo "$U"; else grep -oE 'https?://[^ "'"'"']*token=[^ "'"'"'&]+' "$LOGFILE" 2>/dev/null | head -n1; fi
     ;;
 
   *)

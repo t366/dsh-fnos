@@ -123,13 +123,39 @@ $ curl -s -o /dev/null -w '%{http_code}' "http://…/?token=A"$'\r'
 
 `e5a148e` 把这个坑写进了 [PLAN §5.1.1](../PLAN.md)。
 
+## 阶段 8：0.5.0 安全承诺与健壮性（20:38–20:46）
+
+起因是对照社区方案做审查（dshbase / `techysy/deepseek-harness-fnos`、
+`10000ge10000/deepseek-harness-fpk`、论坛帖 70194），发现我们 README 里
+「公网来源不会被自动放行，这条写在代码里」**在有反向代理时不成立**：
+
+- `launcher` 只看 `socket.remoteAddress`，本机反代会让它变成 `127.0.0.1`，
+  于是公网访客被当成内网直连、自动拿到带令牌的跳转；
+- 上游文档明确 web profile 是 loopback 服务，跨机访问应由反代 + `--public-url` /
+  `--trusted-host` 负责，我们的 `--host <LAN IP>` 是权宜（换来 T6 双网卡问题）。
+
+同一轮把几处确定性的坑一起修了：
+
+| 编号 | 改动 | 验证 |
+|---|---|---|
+| F9 | `viaProxy()`：出现任何代理头就不自动放行，落配对页 | 本地起假上游：直连 302、带 `X-Forwarded-For`/`X-Real-IP` 均 200 |
+| F10 | token 抓取不再写死字符集（`.`/`+`/`%`/`=` 都保留） | token `abc.def-ghi_jkl` → Location 完整、上游 303 |
+| F11 | `force_rm()`：先恢复权限再删，删不掉明确告知 | 语法检查；真机待验 |
+| F12 | 同版本打包默认 `die`，`DSH_ALLOW_SAME_VERSION=1` 放行 | 语法检查 |
+| F13 | selftest 用 `cygpath -u` 去掉盘符冒号、自动取 PATH 的 node | 直接跑：**29 通过 / 22 跳过 / 0 失败**（原 22/22/7） |
+
+`selftest.sh` 同步加了「带 X-Forwarded-For 不自动跳转」的回归项。本轮没有动
+`cmd/main` 的进程编排，也没有实现「先换 cookie 再转发」——后者取决于 T2 的真机结论。
+
 ## 下一步
 
-1. **重跑** `bash build.sh full`，确认 `通过 54 / 跳过 0 / 失败 0` 与
-   `dsh 版本校验通过：0.2.1-rc.3`；
+1. **重跑** `bash build.sh full`（自测必须全绿；本轮多了一条代理头回归，
+   通过数会比上次多 1），确认 `dsh 版本校验通过：0.2.1-rc.3`；
 2. 界面卸载（保留）→ 手动安装 → 点图标应直接进入（不再出现配对页）；
 3. 跑 `probe/05-verify-fpk.sh` 与 `probe/07-cookie-persistence.sh`，回答 T2
    （cookie 是否活过重启、令牌是否一次性）；
-4. 若令牌一次性 → 跳转器要改成「先换 cookie 再转发」。
+4. 若令牌一次性 → 跳转器要改成「先换 cookie 再转发」；
+5. **中期**：接飞牛统一网关（T7），launcher 只监听 `127.0.0.1`，同时解决
+   双网卡、DDNS、FN Connect 与鉴权；看护（T8）在同一轮设计，避免两套重启逻辑打架。
 
 未完成项见 [ISSUES.md](ISSUES.md) 第三节。

@@ -11,16 +11,23 @@
 #   TEST_PORT=13081 bash selftest.sh
 #
 # 在 fnOS 上跑不需要任何参数（会用 /var/apps/nodejs_v24 的 node）。
-# 在开发机（Git Bash / macOS）上跑，建议指定 node，否则 start 会报「未找到 Node」：
-#   TMPDIR=/e/tmp DSH_TEST_NODE="$(command -v node)" bash selftest.sh
-# 注意 TMPDIR 路径不要带盘符冒号（E:/xxx）—— TRIM_DATA_SHARE_PATHS 用 ':' 分隔多路径，
-# 盘符会把它切成 "E"，共享目录就解析不到。
+# 开发机（Git Bash / macOS）也可直接跑：脚本会自动把 TMPDIR 转成无盘符形式
+# （否则 TRIM_DATA_SHARE_PATHS 会被盘符里的冒号截断），并用 PATH 里的 node 起 stub。
+# 要指定特定 node 时：DSH_TEST_NODE="$(command -v node)" bash selftest.sh
 # ============================================================================
 
 set -u
 
 HERE="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 ROOT="${TMPDIR:-/tmp}/dsh-selftest-$$"
+
+# Git Bash 的 TMPDIR 常是 C:\Users\...，而 TRIM_DATA_SHARE_PATHS 用 ':' 分隔多路径，
+# 盘符里的冒号会把共享目录切成 "C"，install_callback 于是判定「没有共享目录」，
+# 后面一串「dsh-home 在共享目录里 / Key 写入副本 / 会话存活」全部假失败。
+# 转成 MSYS 形式 /c/Users/...，冒号消失，测试与真机（Linux 路径）语义一致。
+if command -v cygpath >/dev/null 2>&1; then
+  ROOT="$(cygpath -u "$ROOT" 2>/dev/null || printf '%s' "$ROOT")"
+fi
 PORT="${TEST_PORT:-}"
 
 port_free() { # $1=port
@@ -44,6 +51,14 @@ FAILED_NAMES=""
 # 这类断言在开发机上只会刷屏失败，掩盖真正的问题 → 一律 SKIP，等 fnOS 上跑才判定。
 LINUX=no
 case "$(uname -s 2>/dev/null)" in Linux) LINUX=yes ;; esac
+
+# 开发机上自动用 PATH 里的 node 起 stub：find_node 只认 bundled 运行时与 fnOS 的
+# nodejs_v24，不查 PATH；不指定的话 start 会报「未找到 Node 运行时」。
+# 只在非 Linux 上自动填 —— NAS 的 PATH node 是 v22，不满足 dsh 的 >=24.9。
+if [ "$LINUX" = "no" ] && [ -z "${DSH_TEST_NODE:-}" ] && command -v node >/dev/null 2>&1; then
+  DSH_TEST_NODE="$(command -v node)"
+  export DSH_TEST_NODE
+fi
 
 say()  { printf '%s\n' "$*"; }
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
@@ -465,6 +480,11 @@ JS
       fi
       check "auto：/healthz 自报 auto" "yes" \
         "$(curl -s -m 3 "http://127.0.0.1:$GP/healthz" 2>/dev/null | grep -q '"auto":true' && echo yes || echo no)"
+      # 回归：带代理头不能被当成「本机直连」自动放行。
+      # 反代会把 remoteAddress 变成 127.0.0.1（isPrivate 会认），只看地址就等于
+      # 把公网访客放进带终端与文件工具的 dsh。这条断言守住那个前提。
+      PH="$(hdr -H 'X-Forwarded-For: 203.0.113.9' "http://127.0.0.1:$GP/")"
+      check "auto：带 X-Forwarded-For 不自动跳转（200 配对页）" "200" "$(hcode "$PH")"
       stop_gate
 
       # 抓不到令牌时不能把人送到 dsh 的 401 页，要给一个能看懂的说明页

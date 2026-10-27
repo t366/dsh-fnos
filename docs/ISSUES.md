@@ -30,12 +30,19 @@
 | F6 | Windows 上 Linux 专属断言假失败 | 缺陷 | ✅ | `selftest.sh` `check_linux` |
 | F7 | 自测报 000：假上游还没监听 | 缺陷（测试） | ✅ | `selftest.sh` `wait_up()` + 重试 |
 | F8 | 自测报 000：Location 残留 `\r` | 缺陷（测试） | ✅ | `hloc()`/`getloc()` 改 `tr -d '\r'` |
+| F9 | `auto` 把反代来源误判成内网直连 | 缺陷（安全） | ✅ | `launcher` `viaProxy()`；`selftest` 加回归 |
+| F10 | token 字符集写死，含 `.` 就被截断 | 缺陷 | ✅ | `cmd/main` + `launcher` + probe 统一放宽 |
+| F11 | purge 在共享目录 000 时静默失败 | 缺陷 | ✅ | `uninstall_callback` `force_rm()` + 失败告知 |
+| F12 | 同版本打包只警告，装上去是空操作 | 缺陷 | ✅ | `build.sh` 默认阻断，`DSH_ALLOW_SAME_VERSION=1` 放行 |
+| F13 | 开发机上 selftest 大面积假失败 | 缺陷（测试） | ✅ | `selftest.sh` `cygpath -u` + 自动取 PATH 的 node |
 | T1 | 0.5.0 未完成打包与真机安装 | — | ⚠️ | 下一步 |
 | T2 | cookie 跨重启 / 令牌是否一次性 | — | ⚠️ | `probe/07` |
 | T3 | 端口写死 3080，不可配置 | — | 📋 | 改端口=卸载重装 |
 | T4 | 升级不可降级，schema 兼容未验证 | — | 📋 | 见 PLAN §7.6 |
 | T5 | 990MB 包的安装耗时与磁盘峰值未测 | — | 📋 | — |
 | T6 | 双网卡（.109 无线 / .114 OVS）绑定选择 | — | 📋 | 自动探测默认路由源地址 |
+| T7 | 未接飞牛统一网关，外网/DDNS 无解 | — | 📋 | 见下文 |
+| T8 | 无进程看护，dsh 崩了不会自动拉起 | — | 📋 | 见下文 |
 
 ---
 
@@ -193,6 +200,67 @@ $ curl -s -o /dev/null -w '%{http_code}' "http://…/?token=A"$'\r'
 `probe/05` 与 `probe/07` 的 `getloc()`（07 原先会因此误判「重启后进不去」）。
 提交 `cfd363c`，来龙去脉见 [PLAN §5.1.1](../PLAN.md)。
 
+### F9 `auto` 把反代来源误判成内网直连（安全）
+
+**现象**：`auto` 模式下，只要 `socket.remoteAddress` 是私网就自动 `302` 带令牌进入。
+反代（nginx / frp / 将来的飞牛统一网关）会把 remoteAddress 变成 `127.0.0.1`，
+于是**公网访客也被放行**——README 原先写的「公网来源不会被自动放行」在套了反代之后不成立，
+而 dsh 自带终端与文件工具。
+
+**修法**：`launcher/server.mjs` 新增 `viaProxy(req)`，看到
+`X-Forwarded-For` / `X-Forwarded-Host` / `X-Forwarded-Proto` / `X-Real-IP` /
+`Forwarded` / `CF-Connecting-IP` / `True-Client-IP` 任一个，就不再相信 remoteAddress，
+一律落到配对页。`selftest.sh` 增加「带 X-Forwarded-For 不自动跳转」的回归项。
+
+**为什么不是直接拒绝**：能拿到令牌的人仍然可以配对进入；这里只收回「自动放行」这一层。
+接入统一网关后应改成校验网关身份头（T7），而不是简单放开。
+
+### F10 token 字符集写死，含 `.` 就被截断
+
+**现象**：`cmd/main`、`launcher`、`probe/*` 都用 `[A-Za-z0-9_-]+` 抓 token。
+上游若把令牌换成带 `.` / `+` / `%` / `=` 的 opaque 串，抓到的只是前半段：
+入口仍然 `302`，但点进去 401，而日志里的 token 已打码，很难看出是被截断。
+
+**修法**：统一改成「只排除分隔符与空白」——shell 用
+`grep -oE 'token=[^&"[:space:]]+' | cut -d= -f2-`，JS 用 `[^&\s]+`（含 `decodeURIComponent`）；
+`extractToken` 的裸 token 白名单放宽到 `[A-Za-z0-9._~+%=-]{8,512}`。
+端到端验证：token 为 `abc.def-ghi_jkl` 时 `Location` 完整、上游回 303。
+
+### F11 purge 在共享目录 000 时静默失败
+
+**现象**：卸载选「全部删除」时，`rm -rf "$SHARE_HOME" 2>/dev/null`。
+但卸载流程会把共享目录临时改成 `000`（P6 实测），删除失败且没有任何提示，
+重装后旧会话与 API Key 又被 `install_callback` 恢复回来——「全部删除」成了谎话。
+
+**修法**：`uninstall_callback` 新增 `force_rm()`：先 `chmod u+rwx` 父目录、
+`chmod -R u+rwX` 目标，再删；删完用 `[ -e ]` 复核。失败时写 `TRIM_TEMP_LOGFILE`
+明确告知用户手动删除，不再假装成功。
+
+### F12 同版本打包只警告
+
+**现象**：`build.sh` 发现包版本 = 已安装版本时只打印一段警告，仍然继续打包。
+装上去时应用中心回一句 `is installed`，`target/` 不更新，白折腾一轮。
+
+**修法**：默认 `die`；确实要做同版本对照实验时显式 `DSH_ALLOW_SAME_VERSION=1`。
+
+### F13 开发机上 selftest 大面积假失败
+
+**现象**：Windows 上直接 `bash fpk/selftest.sh` 得到 22 通过 / 7 失败，而不是文档说的全绿。
+失败集中在共享目录与启动：`dsh-home 在共享目录里`、`start 退出码`、`Key 写入副本` 等。
+
+**根因**（两条，都与产品逻辑无关）：
+1. Git Bash 的 `TMPDIR` 是 `C:\Users\...`，而 `TRIM_DATA_SHARE_PATHS` 用 `:` 分隔多路径，
+   盘符里的冒号把共享目录切成 `C` → `install_callback` 判定「没有共享目录」；
+2. `find_node()` 只认 bundled 运行时与 fnOS 的 `nodejs_v24`，不查 PATH，
+   开发机上 stub 也起不来。
+
+**修法**：`selftest.sh` 启动时用 `cygpath -u` 把 `ROOT` 转成 `/c/...`（无冒号），
+非 Linux 上自动取 `command -v node` 作为 `DSH_TEST_NODE`。
+实测：**29 通过 / 22 跳过 / 0 失败**，与 NAS 语义一致。
+**注意**：跳过项仍是 Linux 专属断言（权限位、`/proc`、进程组），Windows 上的绿灯
+不代表这些项也验过。
+
+
 ---
 
 ## 三、待验证 / 待办
@@ -229,6 +297,28 @@ dsh 的会话/数据库 schema 升级后不保证向下兼容。回滚边界见 
 
 这台 NAS 有 `192.168.0.109`（无线）与 `192.168.0.114`（OVS）。桌面入口用的是**你访问飞牛
 时浏览器里的 host**，而 dsh 只能绑一个地址——绑错就点不开。当前策略是自动探测默认路由源地址。
+
+### T7 未接飞牛统一网关 📋
+
+现在桌面入口是 `http://<浏览器host>:3080/` 直连端口，因此：外网只能用 VPN/Tailscale、
+DDNS 与 FN Connect 用不了、双网卡绑错就打不开（T6）。社区成熟方案（dshbase /
+`techysy/deepseek-harness-fnos`）走的是 fnOS 统一网关：
+
+- manifest 声明 `microApp`，桌面入口指向 `/app/dsh`；
+- 反代经 `target/app.sock`（unix socket）转到 `127.0.0.1:28000`；
+- 网关先完成 fnOS 账号登录，再转发身份头（`X-Trim-Userid` / `X-Trim-Isadmin`）。
+
+接入后 launcher 只监听 `127.0.0.1`，`auto` 模式应改成「只信任来自 app.sock 且带网关身份头」
+的连接，而不是像 F9 那样一律要求配对。需要先核对
+[docs/FNOS-OFFICIAL-DOCS.md](FNOS-OFFICIAL-DOCS.md) 里 `microApp` / socket 的字段规范。
+
+### T8 无进程看护 📋
+
+fnOS 没有 systemd，进程只由应用中心轮询 `cmd/main status` 驱动。`dsh` 本体崩溃后：
+launcher 还活着 → `status` 仍返 0，应用中心不会拉起；launcher 死了 → `status` 返 1，
+但不保证平台会自动重启。用户看到的是「点图标进不去」。可做的最小方案：launcher
+在每次请求时探测内部端口，连续失败则记录并在 `/healthz` 暴露；或由 launcher 兼作看护，
+`spawn` dsh 并在退出时重启（需先确认不会与应用中心的 stop 竞争）。
 
 ---
 

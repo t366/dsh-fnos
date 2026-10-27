@@ -310,9 +310,9 @@ fi
 sec "7. 入口、令牌与配对"
 if [ "$HAS_DSH" = "yes" ]; then
   if [ -f "$ROOT/var/launcher.json" ]; then
-    ok "跳转器 state 就位" "$(sed -E 's/(token=)[A-Za-z0-9_-]+/\1***/g' "$ROOT/var/launcher.json" 2>/dev/null)"
+    ok "跳转器 state 就位" "$(sed -E 's/(token=)[^&" ]+/\1***/g' "$ROOT/var/launcher.json" 2>/dev/null)"
     STOK="$(sed -nE 's/.*"token":"([^"]*)".*/\1/p' "$ROOT/var/launcher.json" 2>/dev/null)"
-    if [ -n "$STOK" ] && [ "$STOK" = "$(sed -nE 's/.*token=([A-Za-z0-9_-]+).*/\1/p' "$ROOT/var/dsh-url.txt" 2>/dev/null | head -n1)" ]; then
+    if [ -n "$STOK" ] && [ "$STOK" = "$(grep -oE 'token=[^&"[:space:]]+' "$ROOT/var/dsh-url.txt" 2>/dev/null | head -n1 | cut -d= -f2-)" ]; then
       ok "state 里的令牌与 dsh-url.txt 一致" "点图标即进靠的就是它"
     else
       warn "state 里的令牌缺失或与 dsh-url.txt 不一致" "自动进入会退化成配对页"
@@ -330,7 +330,7 @@ if [ "$HAS_DSH" = "yes" ]; then
 fi
 
 if [ -f "$ROOT/var/dsh-url.txt" ]; then
-  ok "已抓到入口 URL（token 打码）" "$(sed -E 's/(token=)[A-Za-z0-9_-]+/\1***/' "$ROOT/var/dsh-url.txt" 2>/dev/null | head -n1)"
+  ok "已抓到入口 URL（token 打码）" "$(sed -E 's/(token=)[^&" ]+/\1***/' "$ROOT/var/dsh-url.txt" 2>/dev/null | head -n1)"
   echo "      完整地址：$ROOT/cmd/main url     （或 cat $ROOT/var/dsh-url.txt）"
 elif [ "$HAS_DSH" = "yes" ]; then
   warn "dsh 运行时在，但没有 dsh-url.txt" \
@@ -345,7 +345,7 @@ fi
 #           把这条地址再请求一次必须不是 401 —— 401 就是「点了图标进不去」。
 # pair 模式：没有 cookie 时给配对页；POST 正确令牌应 302 + dsh_gate。
 if [ "$HAS_DSH" = "yes" ] && [ -n "${BINDIP:-}" ]; then
-  TOK="$(sed -nE 's/.*token=([A-Za-z0-9_-]+).*/\1/p' "$ROOT/var/dsh-url.txt" 2>/dev/null | head -n1)"
+  TOK="$(grep -oE 'token=[^&"[:space:]]+' "$ROOT/var/dsh-url.txt" 2>/dev/null | head -n1 | cut -d= -f2-)"
   HJ="$(curl -s -m 6 "http://$BINDIP:$RPORT/healthz" 2>/dev/null)"
   EMODE=unknown
   case "$HJ" in

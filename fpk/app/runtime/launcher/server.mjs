@@ -12,8 +12,9 @@
 //     （cmd/main 启动 dsh 后从日志抓到并写入，600 权限、同用户可读），
 //     拼成 http://<绑定IP>:<内部端口>/?token=… 后 302。
 //     只对私有网段（10/8、172.16/12、192.168/16、100.64/10、fc00::/7、
-//     ::1）放行；来自公网地址的请求仍然要求配对，避免把 NAS 映射到公网后
-//     整个 dsh 变成"无密码可执行终端"。
+//     ::1）的**直连**放行；来自公网地址、或带代理头（X-Forwarded-For 等）
+//     的请求仍然要求配对，避免把 NAS 映射到公网 / 套一层反代后，整个 dsh
+//     变成"无密码可执行终端"。
 //
 //   pair —— 老行为。没有 dsh_gate cookie 的访客只能看到「粘贴入口令牌」页，
 //     粘贴的令牌不比对、不解析，直接拿去请求 dsh，回 3xx 即视为有效。
@@ -108,8 +109,11 @@ function readState() {
 function targetUrl(st) {
   let tok = typeof st.token === 'string' ? st.token.trim() : '';
   if (!tok) {
-    const m = /[?&]token=([A-Za-z0-9_-]+)/.exec(String(st.url || ''));
-    if (m) tok = m[1];
+    // 与 cmd/main 的抓取规则保持一致：不写死字符集（见那里的注释）。
+    const m = /[?&]token=([^&\s]+)/.exec(String(st.url || ''));
+    if (m) {
+      try { tok = decodeURIComponent(m[1]); } catch { tok = m[1]; }
+    }
   }
   if (!tok) return '';
 
@@ -137,6 +141,30 @@ function isPrivate(ip) {
   if (s.startsWith('fe80:')) return true;
   if (/^f[cd][0-9a-f]{2}:/.test(s)) return true; // IPv6 ULA fc00::/7
   return false;
+}
+
+// ---------------------------------------------------------------- 代理判定
+// 只要出现「客户端地址由代理提供」的头，就不再相信 socket.remoteAddress。
+//
+// 原因：本机反代（nginx / frp / 飞牛统一网关）会把 remoteAddress 变成
+// 127.0.0.1，而 127/8 属于 isPrivate() —— 公网访客会被误判成内网并自动
+// 放行，等于把带终端与文件工具的 dsh 敞开。这里宁可多要求一次配对，
+// 也不接受「无法确认来源」的自动进入。
+//
+// 将来接入飞牛统一网关时，正确做法不是删掉这段，而是改成「校验网关签名/
+// 身份头 + 只信任来自 app.sock 的连接」，见 docs/ISSUES.md T7。
+const PROXY_HEADERS = [
+  'x-forwarded-for',
+  'x-forwarded-host',
+  'x-forwarded-proto',
+  'x-real-ip',
+  'forwarded',
+  'cf-connecting-ip',
+  'true-client-ip',
+];
+
+function viaProxy(req) {
+  return PROXY_HEADERS.some((h) => req.headers[h] !== undefined);
 }
 
 // ---------------------------------------------------------------- cookie
@@ -217,9 +245,10 @@ function extractToken(text) {
   // 支持三种粘法：完整 URL、`token=xxx`、光秃秃的 token 本身。
   // 裸 token 的下限放到 8：真实令牌通常 32+ 位，但下限写 16 会把短令牌
   // （以及我们一起联调用的测试令牌）误判成「没识别到」→ 400。
-  const m = /token=([A-Za-z0-9_-]{8,})/.exec(s);
+  // 字符集同样不写死：上游可能用 "." / "~" / "+" / "%" / "=" 组成 opaque 串。
+  const m = /token=([^&\s]{8,})/.exec(s);
   if (m) return m[1];
-  if (/^[A-Za-z0-9_-]{8,256}$/.test(s)) return s;
+  if (/^[A-Za-z0-9._~+%=-]{8,512}$/.test(s)) return s;
   return '';
 }
 
@@ -355,6 +384,15 @@ const server = http.createServer(async (req, res) => {
 
   // ---- auto：点图标直接进 ----
   if (AUTH === 'auto') {
+    if (viaProxy(req)) {
+      // 有代理头 = 来源由别人转述，不能拿 remoteAddress 当客户端地址。
+      // 这类请求一律落到配对页：能拿到令牌的人仍然进得去，但不会因为
+      // 「反代在本机」就把入口对公网敞开。
+      log(`auto: proxy headers present ip=${ip} -> pair`);
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(pairPage('', '请求经过代理，无法确认来源地址，需要先配对一次。'));
+      return;
+    }
     if (!isPrivate(ip)) {
       // 公网来源一律要求配对，哪怕我们用 auto 模式
       log(`auto: non-private ip=${ip} -> pair`);

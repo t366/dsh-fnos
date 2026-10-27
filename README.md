@@ -84,7 +84,8 @@ bash ~/dsh-fnos/probe/07-cookie-persistence.sh  # 会重启一次应用，验证
 
 - **不要把 3080 映射到公网**；
 - 要从外网用，走 VPN / Tailscale，或把「入口方式」改成 `pair`（新设备粘一次令牌，180 天有效）；
-- 公网来源不会被自动放行，这条写在代码里，不依赖用户记得。
+- 公网来源不会被自动放行；**带 `X-Forwarded-For` / `X-Real-IP` 等代理头的请求也不会**
+  （反代会把来源变成 `127.0.0.1`，只看地址就等于放开）。这条写在代码里，不依赖用户记得。
 
 ## 开发约定
 
@@ -92,5 +93,6 @@ bash ~/dsh-fnos/probe/07-cookie-persistence.sh  # 会重启一次应用，验证
   `build.sh` 打包前还会把 `cmd/` 等自写文本再清一遍。
 - **可执行位**：`cmd/*` 必须有 x 位，`build.sh` 每次都会补；在 Windows 上编辑后别指望它自己保留。
 - **版本号**：改 `manifest` 的 `version` 才叫新版本。同版本重装会被应用中心静默跳过。
-- **改脚本前先跑本地自测**：`bash fpk/selftest.sh`（Windows 上会跳过 22 项进程语义检查，
-  属正常；Linux 上应全绿）。
+- **改脚本前先跑本地自测**：`bash fpk/selftest.sh`。Windows 上应为
+  **29 通过 / 22 跳过 / 0 失败**（22 项是权限位、`/proc`、进程组这类 Linux 专属断言）；
+  Linux 上应全绿。若在 Windows 上看到共享目录相关的失败，先确认是不是用了旧脚本。

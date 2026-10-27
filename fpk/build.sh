@@ -90,11 +90,17 @@ INST_VER=""
 [ -n "$PKG_APP" ] && [ -f "/var/apps/$PKG_APP/manifest" ] && INST_VER="$(mval "/var/apps/$PKG_APP/manifest" version)"
 say "包：$PKG_APP $PKG_VER    已安装：${INST_VER:-<无>}"
 if [ -n "$INST_VER" ] && [ "$PKG_VER" = "$INST_VER" ]; then
-  say ""
-  say "⚠ 版本号与已安装的相同。侧载包没有「覆盖升级」通道："
-  say "   版本不变时应用中心认为还是同一个包，装上去 target/ 不会更新。"
-  say "   打包前请把 manifest 的 version 改成更高值（例如 $PKG_VER → 下一版）。"
-  say ""
+  if [ "${DSH_ALLOW_SAME_VERSION:-0}" = "1" ]; then
+    say ""
+    say "⚠ 版本号与已安装的相同，按 DSH_ALLOW_SAME_VERSION=1 继续。"
+    say "   注意：应用中心会把它们当成同一个包，装上去不会替换 target/。"
+    say ""
+  else
+    die "包版本与已安装的相同（$PKG_VER）。侧载包没有覆盖升级通道：同版本装上去
+       应用中心只回一句 is installed，target/ 不会更新。
+       处理办法：把 manifest 的 version 改成更高值后重打；
+       确实要做同版本对照实验时，显式加 DSH_ALLOW_SAME_VERSION=1。"
+  fi
 fi
 
 # ---------------------------------------------------------------- 2. 必需文件
@@ -333,5 +339,5 @@ say "  3) 应用中心 → 手动安装 → 选择刚下载的 $(basename "$FPK"
 say "     向导里 API Key 留空即沿用旧值，入口方式默认「点图标直接进入」"
 say ""
 if [ -n "$INST_VER" ] && [ "$PKG_VER" = "$INST_VER" ]; then
-  say "注意：版本与已安装的相同，应用中心会把它当成同一个包。打包前请把 manifest 的 version 提上去。"
+  say "注意：版本与已安装的相同，装上去不会替换 target/（本次由 DSH_ALLOW_SAME_VERSION=1 放行）。"
 fi

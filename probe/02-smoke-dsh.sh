@@ -343,7 +343,7 @@ URL=""
 for i in $(seq 1 90); do
   sleep 1
   if ! kill -0 "$PID" 2>/dev/null; then break; fi
-  URL="$(grep -oE 'https?://[^ "'"'"']*token=[A-Za-z0-9_-]+' "$LOG" 2>/dev/null | head -n1)"
+  URL="$(grep -oE 'https?://[^ "'"'"']*token=[^ "'"'"'&]+' "$LOG" 2>/dev/null | head -n1)"
   [ -n "$URL" ] && break
 done
 T1=$(date +%s)

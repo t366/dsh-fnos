@@ -13,8 +13,23 @@ SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 APPNAME="dsh"
 PKGVAR="${TRIM_PKGVAR:-/tmp}"
 LOGFILE="$PKGVAR/info.log"
+ERRFILE="${TRIM_TEMP_LOGFILE:-}"
 
 log() { printf '%s [%s] uninstall_callback: %s\n' "$(date '+%F %T')" "$$" "$*" >>"$LOGFILE" 2>/dev/null; }
+
+# 卸载流程会把共享目录临时改成 000（P6 实测），这时 rm -rf 会静默失败，
+# 于是「全部删除」实际留下了会话与 API Key。先恢复所有者权限再删，
+# 删不掉就明确告知用户，不要假装成功。
+force_rm() { # $1=路径；返回 0 表示确认已不存在
+  local p="$1" d
+  [ -e "$p" ] || return 0
+  d="$(dirname "$p" 2>/dev/null)"
+  [ -n "$d" ] && chmod u+rwx "$d" 2>/dev/null
+  chmod -R u+rwX "$p" 2>/dev/null
+  rm -rf "$p" 2>/dev/null
+  [ -e "$p" ] && return 1
+  return 0
+}
 
 resolve_share() {
   local first p
@@ -40,13 +55,22 @@ SHARE_HOME=""
 
 if [ "$PURGE" = "1" ]; then
   log "purge: 删除用户数据"
-  [ -n "$SHARE_HOME" ] && rm -rf "$SHARE_HOME" 2>/dev/null
-  rm -rf "$PKGVAR/dsh-home" 2>/dev/null
+  FAILED=""
+  if [ -n "$SHARE_HOME" ] && ! force_rm "$SHARE_HOME"; then
+    FAILED="$SHARE_HOME"
+  fi
+  force_rm "$PKGVAR/dsh-home" || FAILED="${FAILED:+$FAILED, }$PKGVAR/dsh-home"
   # 入口跳转器的状态与密钥也一起清：留着的话重装后旧 cookie 仍然能通过校验，
   # 而“全部删除”应该连“已配对的设备”这层信任一起收回。
   rm -f "$PKGVAR/dsh-url.txt" "$PKGVAR/dsh.pid" \
         "$PKGVAR/launcher.json" "$PKGVAR/launcher.pid" \
         "$PKGVAR/launcher-secret" 2>/dev/null
+  if [ -n "$FAILED" ]; then
+    log "WARN: purge 未完成，仍存在：$FAILED"
+    [ -n "$ERRFILE" ] && printf '应用已卸载，但部分数据未能删除：\n%s\n请在「文件管理」里手动删除，或检查该目录的属主与权限。\n' "$FAILED" >"$ERRFILE" 2>/dev/null
+  else
+    log "purge: 用户数据已删除"
+  fi
 else
   log "keep: 数据保留在 ${SHARE_HOME:-$PKGVAR/dsh-home}"
 fi

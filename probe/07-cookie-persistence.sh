@@ -91,10 +91,10 @@ for _ in 1 2 3 4 5; do
   sleep 1
 done
 if [ -z "$URL" ]; then
-  URL="$(grep -oE 'https?://[^ "'"'"']*token=[A-Za-z0-9_-]+' "$ROOT/var/info.log" 2>/dev/null | tail -n1)"
+  URL="$(grep -oE 'https?://[^ "'"'"']*token=[^ "'"'"'&]+' "$ROOT/var/info.log" 2>/dev/null | tail -n1)"
 fi
 if [ -n "$URL" ]; then
-  ok "拿到入口 URL：$(printf '%s' "$URL" | sed -E 's/(token=)[A-Za-z0-9_-]+/\1***/')"
+  ok "拿到入口 URL：$(printf '%s' "$URL" | sed -E 's/(token=)[^&" ]+/\1***/')"
 else
   bad "拿不到带 token 的 URL"
   say "  日志尾部："
@@ -102,7 +102,7 @@ else
   hr; printf '结果：PASS %s / FAIL %s\n' "$PASS" "$FAIL"
   exit 1
 fi
-TOKEN1="$(printf '%s' "$URL" | sed -nE 's/.*token=([A-Za-z0-9_-]+).*/\1/p')"
+TOKEN1="$(printf '%s' "$URL" | grep -oE 'token=[^&"[:space:]]+' | head -n1 | cut -d= -f2-)"
 # 令牌 URL 里带 dsh 自己的端口，比 settings 里的 service_port 更可靠
 UPORT="$(printf '%s' "$URL" | sed -nE 's#^[a-z]+://[^/:]+:([0-9]+)/.*#\1#p')"
 if [ -n "${UPORT:-}" ] && [ "$UPORT" != "$DPORT" ]; then
@@ -158,11 +158,11 @@ EH="$(curl -s -m 10 -o /dev/null -D - "$ENTRY" 2>/dev/null)"
 ECODE="$(printf '%s' "$EH" | sed -nE 's#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' | head -n1)"
 ELOC="$(getloc "$EH")"
 say "  GET $ENTRY → HTTP $ECODE"
-say "  Location → $(printf '%s' "$ELOC" | sed -E 's/(token=)[A-Za-z0-9_-]+/\1***/')"
+say "  Location → $(printf '%s' "$ELOC" | sed -E 's/(token=)[^&" ]+/\1***/')"
 
 URL2=""
 [ -s "$ROOT/var/dsh-url.txt" ] && URL2="$(head -n1 "$ROOT/var/dsh-url.txt")"
-TOKEN2="$(printf '%s' "${URL2:-}" | sed -nE 's/.*token=([A-Za-z0-9_-]+).*/\1/p')"
+TOKEN2="$(printf '%s' "${URL2:-}" | grep -oE 'token=[^&"[:space:]]+' | head -n1 | cut -d= -f2-)"
 if [ -n "$TOKEN2" ]; then
   say "  token 是否变了：$([ "$TOKEN1" = "$TOKEN2" ] && echo '没变（意外）' || echo '变了（符合预期，每次启动重新 mint）')"
 else

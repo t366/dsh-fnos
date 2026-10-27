@@ -406,7 +406,10 @@ write_state() { # $1=bind
   local url="" tok=""
   [ -s "$URLFILE" ] && url="$(head -n1 "$URLFILE" 2>/dev/null)"
   [ -n "$url" ] || url="http://$1:$INTERNAL_PORT/"
-  tok="$(printf '%s' "$url" | sed -nE 's/.*[?&]token=([A-Za-z0-9_-]+).*/\1/p')"
+  # token 的字符集不要写死成 [A-Za-z0-9_-]：上游可能换成带 "." / "+" / "="
+  # 的 opaque 串，写死会把 token 截断，表现为「跳转 302 了但点进去 401」，
+  # 而日志里的 token 已打码，很难看出是被截断。这里只排除分隔符与空白。
+  tok="$(printf '%s' "$url" | grep -oE 'token=[^&"[:space:]]+' | head -n1 | cut -d= -f2-)"
   printf '{"url":"%s","token":"%s","host":"%s","port":%s,"since":%s}\n' \
     "$url" "$tok" "$1" "$INTERNAL_PORT" "$(now)" >"$STATEFILE"
   chmod 600 "$STATEFILE" 2>/dev/null
@@ -525,7 +528,7 @@ do_start() {
     # 这个 token 现在是「点图标即进」的唯一来源，早放弃等于入口打不开。
     while [ "$waited" -lt 80 ]; do
       url="$(tail -c +"$((logoff + 1))" "$LOGFILE" 2>/dev/null \
-             | grep -oE 'https?://[^ "'"'"']*token=[A-Za-z0-9_-]+' | tail -n1)"
+             | grep -oE 'https?://[^ "'"'"']*token=[^ "'"'"'&]+' | tail -n1)"
       [ -n "$url" ] && break
       sleep 0.1
       waited=$((waited + 1))
