@@ -340,7 +340,11 @@ if [ "$HAS_DSH" = "yes" ] && [ -n "${BINDIP:-}" ]; then
     *'"mode":"auto"'*) EMODE=auto ;;
     *'"mode":"pair"'*) EMODE=pair ;;
   esac
-  ok "入口模式：$EMODE"
+  if [ "$EMODE" = "unknown" ]; then
+    warn "读不到入口模式（/healthz 无响应）" "跳转器可能没起来，或版本低于 0.5.0"
+  else
+    ok "入口模式：$EMODE"
+  fi
 
   HDR="$(curl -s -m 8 -o /dev/null -D - "http://$BINDIP:$RPORT/" 2>/dev/null)"
   ECODE="$(printf '%s' "$HDR" | sed -nE 's#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' | head -n1)"
@@ -353,7 +357,8 @@ if [ "$HAS_DSH" = "yes" ] && [ -n "${BINDIP:-}" ]; then
       bad "点图标没有直接跳转（HTTP ${ECODE:-无响应}）" "期望 302；出现在这里说明自动取令牌失败"
     fi
     case "$LOC" in
-      *"token=$TOK"*) ok "跳转地址带本次启动的令牌" "令牌与 dsh-url.txt 一致" ;;
+      *"token=$TOK"*) [ -n "$TOK" ] && ok "跳转地址带本次启动的令牌" "令牌与 dsh-url.txt 一致" \
+                        || warn "跳转地址的形状对，但 dsh-url.txt 里没有令牌" "看看是不是没抓到" ;;
       *token=*)       bad "跳转地址里的令牌与 dsh-url.txt 不一致" "可能是上一轮遗留的 state" ;;
       *)              warn "跳转地址里没有令牌" "检查 launcher.json 的 token 字段" ;;
     esac
