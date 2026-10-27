@@ -140,34 +140,29 @@ say "ok"
 if command -v node >/dev/null 2>&1; then
   node -e '
 const fs=require("fs");
-// 图标校验。两处都在和"显示尺寸"对齐，规则说明如下：
+// 图标校验。2026-10-28 起四处图标都直接用 DeepSeek 官方仓库的成品图标
+// （apps/web/public/icon-512.png，512×512），原样复制、不缩放不调色，四个文件
+// 的 SHA-256 完全一致。所以这里不再限定具体边长，只守三条底线：
+//   正方形 / 边长 64~1024 / ≤1024KB
 //
-// 1) 入口图标 app/ui/images/icon_64.png —— ui/config 用 images/icon_{0}.png，
-//    {0} 由系统替换成需要的尺寸。详情页在 ~56 CSS px（本机实测约 96 物理像素）处显示它。
-//    文件名保持不变，只把像素给足（这里允许 64 或 256），浏览器缩放时更清晰。
-// 2) 包根 ICON.PNG —— 官方规范写 64×64，但 0.6.3 实测：详情页那个 96 物理像素的图标
-//    读的就是这张。64 拉到 96 必然发虚，简化图形也救不回来。故放开到 64 或 256，
-//    实际给 256，交给平台自己缩。若某天安装器因尺寸拒绝安装，改回 64 并把
-//    "64px 下仍要清晰"当硬约束重新设计图形。
-// 3) 视觉：深蓝底(#23328C) + 白鲸剪影。2026-10-28 实测社区同款项目：
-//    yuexps(113★) 用 640×640 白底近黑鲸、techysy(77★) 用 128×128 近黑鲸，
-//    都靠高对比取胜；而 FNOSP(61★) 用 64px 官方蓝鲸 favicon，放大后确实糊。
-//    品牌蓝 #4D6BFE 配白鲸只有 4.3:1，56px 下会"软"；加深到 #23328C 是 11:1。
-//    ICON.PNG 尺寸也不是硬约束——yuexps 的 ICON.PNG 与 ICON_256.PNG 是同一个
-//    640×640 文件，说明安装器不校验，只有 fnpack 打包时才要求 64（我们不用 fnpack）。
-const want={"ICON.PNG":[64,256],"ICON_256.PNG":256,"app/ui/images/icon_64.png":[64,256],"app/ui/images/icon_256.png":256};
+// 为什么不再固定 64 或 256：
+//  - 官方规范写 ICON.PNG=64×64，但那是 fnpack build 的校验（MAA-FnOS 构建指南原文
+//    写过），我们用自研 build.sh 打 tar，不受这条限制；
+//  - 社区同款项目里 ICON.PNG 有 640×640（yuexps，113★）和 128×128（techysy，77★），
+//    甚至把 ICON.PNG 与 ICON_256.PNG 放成同一个文件，照样能装能用；
+//  - 详情页实际按 ~96 物理像素显示图标，源图小于这个值必然发虚。
+const files=["ICON.PNG","ICON_256.PNG","app/ui/images/icon_64.png","app/ui/images/icon_256.png"];
 let bad=0;
-for(const [f,exp] of Object.entries(want)){
+for(const f of files){
   const b=fs.readFileSync(f);
   if(b.subarray(1,4).toString()!=="PNG"){console.log("✗ "+f+" 不是 PNG");bad=1;continue;}
   const w=b.readUInt32BE(16),h=b.readUInt32BE(20),kb=Math.round(b.length/1024);
-  const dims=Array.isArray(exp)?exp:[exp];
-  const ok=dims.indexOf(w)>=0&&w===h&&b.length<=1024*1024;
+  const ok=w===h&&w>=64&&w<=1024&&b.length<=1024*1024;
   console.log((ok?"ok  ":"✗   ")+f+"  "+w+"x"+h+"  "+kb+"KB");
   if(!ok)bad=1;
 }
 process.exit(bad);
-' || die "图标不符合规范：需 64/256 正方形 PNG、≤1024KB"
+' || die "图标不符合规范：需正方形 PNG、边长 64~1024、≤1024KB"
 fi
 
 # ---------------------------------------------------------------- 3. JSON 校验
