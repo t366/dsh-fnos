@@ -73,7 +73,8 @@ dsh 版本校验通过：0.2.1-rc.3
 ```
 
 - Linux 上「跳过」必须是 **0**。开发机（Windows）上的 22 项跳过是权限位、`/proc`、
-  进程组这些只能在真机判定的断言，这里会真正执行，所以通过数会比 30 多。
+  进程组这些只能在真机判定的断言，这里会真正执行。
+- **通过数只作参考**（本轮预期 58；每加一条断言就会变），真正的判据是 **`跳过 0 / 失败 0`**。
 - 如果自测开头出现「沙箱内已移除残留的 dsh 运行时」，说明源码树里带着上一次 full
   构建的 `app/runtime/app`（`.gitignore` 的，`git pull` 不会清）。这行是**正常且预期**的
   ——自测已经把它隔离在沙箱外，不影响结论。
@@ -111,7 +112,35 @@ awk 'NF==2 && $2 ~ /^[0-9]+$/ {print $2}' ~/df-peak.log | sort -n | head -1   # 
 
 「安装前可用 − 全程最小可用」= 解包瞬时占用。只关心它有没有逼近 `install_init` 卡的 1.5GB 线。
 
-### 4.1　卸载与安装
+### 4.1　可选实验：不卸载，直接装 0.6.0（回答 T11）
+
+**目的**：确认界面「手动安装」到底能不能覆盖升级。能成的话，以后升级就不必每次卸载。
+
+先记两个状态（用来对比）：
+
+```bash
+grep -E '^[[:space:]]*version' /var/apps/dsh/manifest
+ls -l --time-style=full-iso /vol1/@appcenter/dsh/runtime/launcher/server.mjs
+```
+
+然后应用中心 → **手动安装** → 选 0.6.0 的包（**先别卸载**）。装完复核：
+
+```bash
+grep -E '^[[:space:]]*version' /var/apps/dsh/manifest          # 期望 0.6.0
+grep -iE 'upgrade_(init|callback)' /var/apps/dsh/var/info.log  # 有则说明钩子被执行
+ls -l --time-style=full-iso /vol1/@appcenter/dsh/runtime/launcher/server.mjs
+curl -s -o /dev/null -w 'loop=%{http_code}\n' http://127.0.0.1:3080/healthz
+```
+
+三种结果分别怎么走：
+
+| 现象 | 含义 | 下一步 |
+|---|---|---|
+| 版本 `0.6.0`、mtime 更新、`loop=200` | 覆盖安装可行 | **跳过 4.2**，直接进第 5 步 |
+| 版本仍是 `0.5.0`、mtime 没变 | 平台静默跳过（与 CLI 同病） | 回 4.2 走卸载+安装，**数据不丢** |
+| 版本变了但 `loop` 不通 / 点不开 | 叠文件把新旧混在一起 | 也回 4.2 重装一次即可 |
+
+### 4.2　卸载与安装
 
 1. 应用中心 → dsh → **卸载** → 弹窗选「**保留会话、凭据与设置**」；
 2. 应用中心 → **手动安装** → 选刚下载的 `dsh.fpk` → 安装；

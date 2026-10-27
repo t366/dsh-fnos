@@ -66,7 +66,9 @@ dsh 每次启动都会 mint 新 token，且没有「固定令牌」开关，所�
 
 `auto` 的安全边界说清楚：能访问到 `NAS:3080` 的内网设备，等于能直接操作 dsh
 （它带终端与文件工具）。所以**不要把 3080 映射到公网**；真要从外网用，走 VPN/Tailscale，
-或把入口方式改成 `pair`。公网 IP 直连时跳转器不会自动放行，这一点已写进代码。
+或把入口方式改成 `pair`。公网来源不会自动放行，**而且只要请求带了
+`X-Forwarded-For` / `X-Real-IP` / `Forwarded` 这类代理头，就一律按"来自反代"处理、要求配对**
+（否则反代一挂，公网访客会被当成内网）。这两点都写在代码里，不依赖用户记得。
 
 ## 排错
 
@@ -75,8 +77,11 @@ dsh 每次启动都会 mint 新 token，且没有「固定令牌」开关，所�
 tail -n 50 /var/apps/dsh/var/info.log
 
 # 入口状态：ready=跳转器有 state，auto=能自动跳，mode=入口模式
-# 注意：launcher 绑的是「自动探测到的局域网地址」，不是 127.0.0.1——
-# 拿回环地址去 curl 会得到空响应，看起来像没起来（0.5.0 装机时踩过）。
+# 0.6.0 起 launcher 同时在 127.0.0.1 上监听（平台上就靠这个判断"在跑"），
+# 所以下面这条最简单的写法现在也是通的；0.5.0 及以前它会返回空。
+curl -s -o /dev/null -w 'loop=%{http_code}\n' http://127.0.0.1:3080/healthz
+
+# 走绑定地址看完整内容（自动探测的是局域网地址，不是 127.0.0.1）
 BIND=$(sed -n 's/^DSH_BIND=//p' /var/apps/dsh/etc/settings.conf | head -n1)
 case "$BIND" in ''|auto) BIND=$(sed -n 's/.*bind=\([0-9.]*\).*/\1/p' /var/apps/dsh/var/info.log | tail -n1) ;; esac
 curl -s "http://${BIND:-127.0.0.1}:3080/healthz"

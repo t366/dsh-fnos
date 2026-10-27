@@ -49,54 +49,21 @@
 | T7 | 未接飞牛统一网关，外网/DDNS 无解 | — | 📋 | 见下文 |
 | T8 | 无进程看护，dsh 崩了不会自动拉起 | — | 📋 | 见下文 |
 | T10 | 应用中心只有「打开 / 卸载」，没有停止 | — | ⚠️ | 根因指向 F17，**待装包验证** |
+| T11 | UI 手动安装更高版本时，是覆盖升级还是静默跳过 | — | 📋 | 见下文；能成可省掉每次卸载 |
 
 ---
 
 ## 当前剩余问题（按优先级）
 
-> 截至 2026-10-27 23:34，代码 `ec1b0b1`、已装包 `0.5.0`。只列**还没关闭**的项；已修条目见第二节。
-
-### P0 当前实例归属 ✅ 已关闭（2026-10-27 23:37）
-
-**背景**：F16 → F18 的连锁——root 起的跳转器占着 `192.168.0.114:3080`，`appcenter-cli stop`
-杀不掉它却删了 pidfile，于是三个状态同时成立：平台认为已停、端口仍被占、`start` 回 10330。
-
-**外部探测区分不了这一层**（23:35 实测 `3080/healthz` → 200、`3081` → 401，root 残留与
-平台拉起的实例给出同样结果）。判据只有端口属主：
-
-```bash
-ss -ltnp | grep -E ':308[01]'
-ps -o user=,args= -p "$(cut -d' ' -f1 /var/apps/dsh/var/dsh.pid)" 2>/dev/null || echo "无 pidfile"
-```
-
-**实测结果（23:37）：正常。**
-
-```
-LISTEN 192.168.0.114:3081  pid=3359059
-LISTEN 192.168.0.114:3080  pid=3359039
-dsh  /vol1/@appcenter/dsh/runtime/node/bin/node …/dsh/lib/bin.js --profile web --host 192.168.0.114 --port 3081
-```
-
-pidfile 存在、属主 `dsh`、命令行与 `--port 3081` 都对得上，PID 已是新一轮（`3359xxx`，
-此前 root 那批是 `3280xxx`）——即**由平台拉起、以应用用户运行**，不再是残留。
-
-**残留的一项已清理（2026-10-27 23:41）**：`dsh-home` 里原有一个 root 所有的旧会话文件
-（F16 造成）。用下面的命令改归属后复核为 **0**：
-
-```bash
-find /vol1/@appshare/dsh/workspace/.dsh-home -user root -exec chown dsh:AppUsers {} + ; \
-  find /vol1/@appshare/dsh/workspace/.dsh-home -user root | wc -l    # 期望 0
-```
-
-这一步不重启应用即可生效（改的是文件属主，不是进程）。
-
-以后同类现象照上面的判据走；处置步骤见 [RUNBOOK「EADDRINUSE 3080」](RUNBOOK.md)，
-**别用 root 手工 `cmd/main start` 应急**，那正是这条链的起点。
+> 截至 2026-10-27 23:55。代码 `41c8852`、真机已装 `0.5.0`、待打包 `0.6.0`。
+> 只列**还没关闭**的项；已修缺陷见第二节，平台限制见第一节。
+>
+> **已关闭（最近）**：P0 实例归属（平台拉起、`dsh` 身份）、F16 的 root 文件残留（复查 0）、
+> T1 / T2（0.5.0 装机验收）。P0 的判据留档在文末，同类问题照抄即可。
 
 ### P1 已修、等下一次装包才生效
 
-打包前必须把 `manifest` 的 `version` 从 `0.5.0` 提到 **`0.6.0`**——`build.sh` 现在遇到
-同版本会直接 `die`（F12）。**已提（2026-10-27 23:38）**，一次打包把这四项全带上：
+版本已提到 **`0.6.0`**（`build.sh` 的同版本守卫会 `die`，F12）。一次打包把这四项全带上：
 
 | 项 | 生效后应看到 |
 |---|---|
@@ -105,14 +72,15 @@ find /vol1/@appshare/dsh/workspace/.dsh-home -user root -exec chown dsh:AppUsers
 | F15 密钥自愈 | `probe/05` 的 `WARN 配对密钥权限是 700` 消失 |
 | `probe/05` 新断言 | `ctl_stop` 丢失、两套 workspace 分裂、dsh-home 混入 root 文件，都会直接 FAIL |
 
-（`probe/07` 的降权自检 F16 属探针侧，`git pull` 即生效，不必等装包。）
+（`probe/07` 的降权自检属探针侧，`git pull` 即生效，不必等装包。）
 
 ### P2 待验证：判据已写好，缺的只是真机跑一次
 
 | 项 | 判据 | 前置 |
 |---|---|---|
 | T10 停止按钮 | 卡片上出现「停止」 | 0.6.0 装包 |
-| 历史会话是否还在 | 由**平台**启动后，侧栏旧会话仍在 | **现在就能验**（见 P0：实例已是平台拉起） |
+| 历史会话是否还在 | 由**平台**启动后，侧栏旧会话仍在 | **现在就能验**（实例已是平台拉起） |
+| **T11 覆盖安装** | 不卸载、直接装更高版本后 `info.log` 出现 `upgrade_init`，且 `target/` 已更新 | 0.6.0 包在手（**建议顺手试，省掉以后每次卸载**） |
 | T5 解包峰值 | 安装时轮询 `df`，峰值不超 1.5GB 阈值余量 | 0.6.0 安装 |
 | T6 双网卡 | 从 `.109` 与 `.114` 两侧都能打开入口 | 无 |
 | T4 能否降级 | 快照回滚后旧 dsh 读不读得动新 schema | 无（高风险，可长期搁置） |
@@ -131,6 +99,21 @@ find /vol1/@appshare/dsh/workspace/.dsh-home -user root -exec chown dsh:AppUsers
 **排序上的一个判断**：如果确定要做 T7，F17 的回环双绑只是过渡措施——统一网关下 launcher
 本来就该只监听 `127.0.0.1`，那时「平台探测不到」和「双网卡绑错」会一起消失。所以 T7 要么
 尽早做，要么明确不做；不要先为 T6 写一套网卡探测，再被 T7 推翻。
+
+### 已关闭记录：P0 实例归属（判据留用）
+
+root 残留与平台拉起的实例在 HTTP 层完全一样（`3080/healthz` 200、`3081` 401 两者都会给），
+所以判据只能是**端口属主 + pidfile + PID 世代**：
+
+```bash
+ss -ltnp | grep -E ':308[01]'
+ps -o user=,args= -p "$(cut -d' ' -f1 /var/apps/dsh/var/dsh.pid)" 2>/dev/null || echo "无 pidfile"
+```
+
+2026-10-27 23:37 实测正常：pidfile 在、属主 `dsh`、命令行含 `--port 3081`，
+PID 已换成新一轮（`3359xxx`，root 那批是 `3280xxx`）。
+处置步骤见 [RUNBOOK「EADDRINUSE 3080」](RUNBOOK.md)；
+**别用 root 手工 `cmd/main start` 应急**，那正是这条链的起点。
 
 ---
 
@@ -566,6 +549,35 @@ du -sh /vol1/@appcenter/dsh                       # 真实占用
 find /vol1/@appcenter/dsh -type f | wc -l         # 文件数
 ```
 
+### T6 双网卡绑定选择 📋
+
+这台 NAS 有 `192.168.0.109`（无线）与 `192.168.0.114`（OVS）。桌面入口用的是**你访问飞牛
+时浏览器里的 host**，而 dsh 只能绑一个地址——绑错就点不开。当前策略是自动探测默认路由源地址。
+
+### T7 未接飞牛统一网关 📋
+
+现在桌面入口是 `http://<浏览器host>:3080/` 直连端口，因此：外网只能用 VPN/Tailscale、
+DDNS 与 FN Connect 用不了、双网卡绑错就打不开（T6）。社区成熟方案（dshbase /
+`techysy/deepseek-harness-fnos`）走的是 fnOS 统一网关：
+
+- manifest 声明 `microApp`，桌面入口指向 `/app/dsh`；
+- 反代经 `target/app.sock`（unix socket）转到 `127.0.0.1:28000`；
+- 网关先完成 fnOS 账号登录，再转发身份头（`X-Trim-Userid` / `X-Trim-Isadmin`）。
+
+接入后 launcher 只监听 `127.0.0.1`，`auto` 模式应改成「只信任来自 app.sock 且带网关身份头」
+的连接，而不是像 F9 那样一律要求配对。需要先核对
+[docs/FNOS-OFFICIAL-DOCS.md](FNOS-OFFICIAL-DOCS.md) 里 `microApp` / socket 的字段规范。
+
+### T8 无进程看护 📋
+
+fnOS 没有 systemd，进程只由应用中心轮询 `cmd/main status` 驱动。`dsh` 本体崩溃后：
+launcher 还活着 → `status` 仍返 0，应用中心不会拉起；launcher 死了 → `status` 返 1，
+但不保证平台会自动重启。用户看到的是「点图标进不去」。可做的最小方案：launcher
+在每次请求时探测内部端口，连续失败则记录并在 `/healthz` 暴露；或由 launcher 兼作看护，
+`spawn` dsh 并在退出时重启（需先确认不会与应用中心的 stop 竞争）。
+
+---
+
 ### T10 应用中心只有「打开 / 卸载」，没有停止 ⚠️
 
 **现象**（2026-10-27，0.5.0 装完）：应用卡片上只有「打开」与「卸载」。用户因此
@@ -612,32 +624,41 @@ appcenter-cli start dsh
 su -s /bin/sh -c '/var/apps/dsh/cmd/main start' dsh    # 退路；必须降权，见 F16
 ```
 
-### T6 双网卡绑定选择 📋
+### T11 UI 手动安装更高版本能否覆盖升级 📋
 
-这台 NAS 有 `192.168.0.109`（无线）与 `192.168.0.114`（OVS）。桌面入口用的是**你访问飞牛
-时浏览器里的 host**，而 dsh 只能绑一个地址——绑错就点不开。当前策略是自动探测默认路由源地址。
+**已知**：命令行这条路彻底不通——`install-fpk` 对已装应用只回 `is installed`（P1），
+`install-local` 必踩 10237（P3），`upgrade_*` 钩子在 CLI 路径上永不执行（PLAN §2.7）。
 
-### T7 未接飞牛统一网关 📋
+**未知**：应用中心界面里的「手动安装」选一个**更高 version 的同一个 appname**，平台是走
+「更新」（触发 `upgrade_init/callback`、替换 `target/`），还是同样静默跳过。这条从没验过，
+而它决定以后每次升级要不要先卸载。
 
-现在桌面入口是 `http://<浏览器host>:3080/` 直连端口，因此：外网只能用 VPN/Tailscale、
-DDNS 与 FN Connect 用不了、双网卡绑错就打不开（T6）。社区成熟方案（dshbase /
-`techysy/deepseek-harness-fnos`）走的是 fnOS 统一网关：
+**为什么值得验**：卸载再安装有三个成本——必须人工在界面点两次、卸载会把共享目录临时改成
+`000`（P6）、一旦包没先下载完就抓不回来。若覆盖安装可行，这些都省掉。
 
-- manifest 声明 `microApp`，桌面入口指向 `/app/dsh`；
-- 反代经 `target/app.sock`（unix socket）转到 `127.0.0.1:28000`；
-- 网关先完成 fnOS 账号登录，再转发身份头（`X-Trim-Userid` / `X-Trim-Isadmin`）。
+**验法**（0.6.0 包出来后，5 分钟）：
 
-接入后 launcher 只监听 `127.0.0.1`，`auto` 模式应改成「只信任来自 app.sock 且带网关身份头」
-的连接，而不是像 F9 那样一律要求配对。需要先核对
-[docs/FNOS-OFFICIAL-DOCS.md](FNOS-OFFICIAL-DOCS.md) 里 `microApp` / socket 的字段规范。
+```bash
+# 前置：已装 0.5.0 且在运行，0.6.0 的 dsh.fpk 已在手
+# 1. 记下当前状态
+grep -E '^[[:space:]]*version' /var/apps/dsh/manifest
+ls -l --time-style=full-iso /vol1/@appcenter/dsh/runtime/launcher/server.mjs
 
-### T8 无进程看护 📋
+# 2. 应用中心 → 手动安装 → 选 0.6.0 的包（不要先卸载）
+# 3. 装完复核
+grep -E '^[[:space:]]*version' /var/apps/dsh/manifest
+grep -iE 'upgrade_(init|callback)' /var/apps/dsh/var/info.log
+ls -l --time-style=full-iso /vol1/@appcenter/dsh/runtime/launcher/server.mjs
+curl -s -o /dev/null -w 'loop=%{http_code}\n' http://127.0.0.1:3080/healthz   # F17 后应为 200
+```
 
-fnOS 没有 systemd，进程只由应用中心轮询 `cmd/main status` 驱动。`dsh` 本体崩溃后：
-launcher 还活着 → `status` 仍返 0，应用中心不会拉起；launcher 死了 → `status` 返 1，
-但不保证平台会自动重启。用户看到的是「点图标进不去」。可做的最小方案：launcher
-在每次请求时探测内部端口，连续失败则记录并在 `/healthz` 暴露；或由 launcher 兼作看护，
-`spawn` dsh 并在退出时重启（需先确认不会与应用中心的 stop 竞争）。
+**判据**：manifest 变成 `0.6.0` **且** `server.mjs` 的 mtime 更新 **且** `info.log` 出现
+`upgrade_init` → 覆盖安装可行，文档里的升级流程可以简化；三者任一不成立 → 维持
+「卸载（保留）+ 安装」，并按 P1 记下平台行为。
+
+**失败也不亏**：数据在共享目录（P6 实测跨卸载存活），直接按原流程卸载+安装即可，不丢东西。
+唯一要防的是「叠文件」——覆盖安装若只叠加不清旧文件，会留下新旧混杂的 `runtime/`
+（PLAN §10.1 的 8 / 10 项）。0.5.0→0.6.0 只改外壳、`dsh` 版本没动，这个风险很小。
 
 ---
 
