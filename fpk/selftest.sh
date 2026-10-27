@@ -408,9 +408,19 @@ JS
       sleep 0.5
     }
 
-    hdr() { curl -s -m 5 -o /dev/null -D - "$@" 2>/dev/null; }
+    hdr() { curl -s -m 5 -o /dev/null -D - "$@" 2>/dev/null | tr -d '\r'; }
     hcode() { printf '%s' "$1" | sed -nE 's#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' | head -n1; }
-    hloc() { printf '%s' "$1" | sed -nE 's/^[Ll]ocation: *(.*[^ ]) *\r?$/\1/p' | head -n1; }
+    # 解析 Location 时不能指望 sed 的 \r 转义：GNU sed 认，fnOS 自带的 sed 不认，
+    # 会把行尾的 \r 原样留在捕获组里。浏览器不介意，但 curl 会判 URL 非法
+    # （exit 3，-w 只拿到 000），看起来像「跳转器给了错地址」，实际是解析没洗干净。
+    # 所以先用 tr 去掉 CR，再用 bash 自己裁尾随空白。
+    hloc() {
+      local v
+      v="$(printf '%s\n' "$1" | tr -d '\r' \
+            | sed -nE 's/^[Ll]ocation:[[:space:]]*//p' | head -n1)"
+      v="${v%"${v##*[![:space:]]}"}"
+      printf '%s' "$v"
+    }
 
     if ! start_gate auto; then
       check "跳转器可启动（auto）" "yes" "no（看 $G/gate.log）"
@@ -424,23 +434,30 @@ JS
         "$(printf '%s' "$LOC" | grep -q "token=$TOK" && echo yes || echo no)"
       check "auto：用绑定地址重建，不照抄日志里的 localhost" "yes" \
         "$(printf '%s' "$LOC" | grep -q "http://127.0.0.1:$UP/" && echo yes || echo no)"
+      # 单独盯一眼「URL 里有没有夹带空白/回车」。这条能一眼区分
+      # 「跳转器地址拼错」和「测试解析没洗干净」——后者在真机上排查代价极高。
+      check "auto：Location 没有夹带空白或回车" "yes" \
+        "$(case "$LOC" in *[[:space:]]*) echo no ;; *) echo yes ;; esac)"
       # 令牌拿去请求上游必须是 303（假 dsh 认得它）。这条能抓住 Location 拼错、
       # 端口写错、token 截断之类「看着像 302 但点了进不去」的问题。
-      ACODE="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$LOC" 2>/dev/null)"
+      ACODE="$(curl -sS -m 5 -o /dev/null -w '%{http_code}' "$LOC" 2>/dev/null)"
       if [ "$ACODE" != "303" ]; then
-        # 单发 000 多半是瞬时的连接失败（上游刚起、或 accept 队列被别的请求占着），
-        # 重试两次；仍然不行才判失败，并把证据打出来，省得又要人肉回传现场。
+        # 单发 000 多半是瞬时的连接失败，重试两次；仍然不行才判失败，
+        # 并把证据打出来，省得又要人肉回传现场。
         for _ in 1 2; do
           sleep 0.4
-          ACODE="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$LOC" 2>/dev/null)"
+          ACODE="$(curl -sS -m 5 -o /dev/null -w '%{http_code}' "$LOC" 2>/dev/null)"
           [ "$ACODE" = "303" ] && break
         done
       fi
       check "auto：上游接受这条令牌（303）" "303" "${ACODE:-无}"
       if [ "$ACODE" != "303" ]; then
+        # 注意用 -sS：-s 会把 curl 自己的报错（比如 URL rejected）也吞掉
         printf '    诊断 LOC=%s\n' "$LOC"
+        printf '    诊断 LOC 字节：%s\n' \
+          "$(printf '%s' "$LOC" | od -An -c 2>/dev/null | tr -s ' ' | tr '\n' ' ' | head -c 200)"
         printf '    诊断 curl：%s\n' \
-          "$(curl -s -m 5 -o /dev/null "$LOC" 2>&1 | head -n 2 | tr '\n' ' ')"
+          "$(curl -sS -m 5 -o /dev/null "$LOC" 2>&1 | head -n 2 | tr '\n' ' ')"
         printf '    诊断 上游日志：%s\n' \
           "$(tr '\n' ' ' <"$G/up.log" 2>/dev/null | head -c 300)"
         printf '    诊断 监听：%s\n' \

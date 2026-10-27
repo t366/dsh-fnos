@@ -31,6 +31,18 @@ bad()  { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m  %s\n' "$*"; }
 warn() { printf '  \033[33mWARN\033[0m  %s\n' "$*"; }
 hr()   { printf -- '----------------------------------------------------------------\n'; }
 
+# 从响应头里取 Location。必须自己掐掉 \r 和行尾空白：
+#   sed 的 \r 转义在 GNU sed 上有效，在 fnOS 自带的 sed 上无效，
+#   残留的 \r 会让 curl 判定 URL 非法（exit 3，http_code 记成 000），
+#   看起来像「跳转地址拼错了」，实际只是解析没洗干净。
+getloc() {
+  local v
+  v="$(printf '%s\n' "$1" | tr -d '\r' \
+        | sed -nE 's/^[Ll]ocation:[[:space:]]*//p' | head -n1)"
+  v="${v%"${v##*[![:space:]]}"}"
+  printf '%s' "$v"
+}
+
 cleanup() { rm -f "$JAR" 2>/dev/null; }
 trap cleanup EXIT
 
@@ -144,7 +156,7 @@ sec "5. 重启后：点图标（不带任何 cookie）还能直接进吗"
 ENTRY="http://$BINDIP:$PORT/"
 EH="$(curl -s -m 10 -o /dev/null -D - "$ENTRY" 2>/dev/null)"
 ECODE="$(printf '%s' "$EH" | sed -nE 's#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' | head -n1)"
-ELOC="$(printf '%s' "$EH" | sed -nE 's/^[Ll]ocation: *(.*[^ ]) *\r?$/\1/p' | head -n1)"
+ELOC="$(getloc "$EH")"
 say "  GET $ENTRY → HTTP $ECODE"
 say "  Location → $(printf '%s' "$ELOC" | sed -E 's/(token=)[A-Za-z0-9_-]+/\1***/')"
 
@@ -177,7 +189,7 @@ esac
 # 「跳转器先换 cookie 再转发给浏览器」，不能再把 token 写进 Location。
 EH2="$(curl -s -m 10 -o /dev/null -D - "$ENTRY" 2>/dev/null)"
 EC2="$(printf '%s' "$EH2" | sed -nE 's#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' | head -n1)"
-ELOC2="$(printf '%s' "$EH2" | sed -nE 's/^[Ll]ocation: *(.*[^ ]) *\r?$/\1/p' | head -n1)"
+ELOC2="$(getloc "$EH2")"
 FC2="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$ELOC2" 2>/dev/null)"
 if [ "$EC2" = "302" ] && { [ "$(printf '%s' "$FC2" | cut -c1)" = "2" ] || [ "$(printf '%s' "$FC2" | cut -c1)" = "3" ]; }; then
   ok "连续第二次点图标仍能进（HTTP $FC2）" "令牌可复用，或 cookie 已生效"

@@ -27,6 +27,18 @@ warn() { printf 'WARN  %s\n' "$1"; [ $# -gt 1 ] && printf '      %s\n' "$2"; WAR
 sec()  { printf '\n== %s\n' "$*"; }
 hr()   { printf -- '----------------------------------------------------------------\n'; }
 
+# 从响应头里取 Location。必须自己掐掉 \r 和行尾空白：
+#   sed 的 \r 转义在 GNU sed 上有效，在 fnOS 自带的 sed 上无效，
+#   残留的 \r 会让 curl 判定 URL 非法（exit 3，http_code 记成 000），
+#   看起来像「跳转地址拼错了」，实际只是解析没洗干净。
+getloc() {
+  local v
+  v="$(printf '%s\n' "$1" | tr -d '\r' \
+        | sed -nE 's/^[Ll]ocation:[[:space:]]*//p' | head -n1)"
+  v="${v%"${v##*[![:space:]]}"}"
+  printf '%s' "$v"
+}
+
 printf 'dsh on fnOS — 安装验收（只读）\n'
 printf '时间：%s\n' "$(date '+%F %T')"
 printf '身份：%s (uid=%s)\n' "$(id -un 2>/dev/null)" "$(id -u 2>/dev/null)"
@@ -348,7 +360,7 @@ if [ "$HAS_DSH" = "yes" ] && [ -n "${BINDIP:-}" ]; then
 
   HDR="$(curl -s -m 8 -o /dev/null -D - "http://$BINDIP:$RPORT/" 2>/dev/null)"
   ECODE="$(printf '%s' "$HDR" | sed -nE 's#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' | head -n1)"
-  LOC="$(printf '%s' "$HDR" | sed -nE 's/^[Ll]ocation: *(.*[^ ]) *\r?$/\1/p' | head -n1)"
+  LOC="$(getloc "$HDR")"
 
   if [ "$EMODE" = "auto" ]; then
     if [ "$ECODE" = "302" ]; then
