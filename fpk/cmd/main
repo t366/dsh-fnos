@@ -496,9 +496,12 @@ link_accessible_paths() {
       suffix=$((suffix + 1))
       [ "$suffix" -gt 20 ] && break
     done
+    # 决定「要挂」这件事单独记一行，与「挂成功没有」分开：
+    # 建软链要特权，某些文件系统（以及开发机上的 Windows）建不了，但
+    # 「该不该出现在首屏」这个判断仍然成立，排错时要能分别看到这两件事。
+    log "access-links: 挂载 $name -> $p"
     if ln -s "$p" "$dir/$name" 2>/dev/null; then
       created=$((created + 1))
-      log "access-links: $name -> $p"
     else
       log "WARN: 无法创建软链 $dir/$name（选择器里将看不到 $p）"
     fi

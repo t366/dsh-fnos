@@ -284,8 +284,10 @@ step "授权目录的浏览入口（F24：选择工作区目录里点得到）"
 LINKS="$HOME_DIR/可访问目录"
 # 决策层（挑哪些路径、跳过哪些）在哪个平台都能验，靠日志；
 # 软链本身在 Windows 上建不了（需要特权），那部分只做 Linux 断言。
+# 注意断言的是「决定挂载」那一行，不是建链成功 —— 后者跟文件系统权限有关，
+# 两者混在一起会让 Windows 上靠 WARN 行蒙对、Linux 上反而误报。
 check "授权目录已进入待挂载列表" "yes" \
-  "$(grep -qF "$LINKS/photos" "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
+  "$(grep -qF "access-links: 挂载 photos -> $ROOT/shares/photos" "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
 # 共享目录包含 .dsh-home，链上去会变成 可访问目录/workspace/.dsh-home/可访问目录… 无限递归
 check "包含数据目录的授权路径被跳过（防递归）" "yes" \
   "$(grep -q 'access-links: 跳过.*（包含 dsh 数据目录' "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
