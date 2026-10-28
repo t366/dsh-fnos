@@ -287,6 +287,12 @@ error="10237:fork/exec /tmp/appcenter.pack./cmd/install_init: permission denied"
 - `install_callback` 安装时自动 `chmod a+rx` 修共享目录的 000（修不了就告警并退回
   `@appdata`，能跑，但升级会丢）；
 - `cmd/main` 用同一套推导顺序解析 `dsh-home`，`mkdir` 失败时退回 `@appdata`。
+- **副作用（2026-10-28 补记，见 ISSUES F22）**：`HOME` 落进共享目录后，dsh 首启要解析
+  「系统文档目录」时，`xdg-user-dir DOCUMENTS` 在缺少 `~/.config/user-dirs.dirs` 的情况下会
+  回显 `$HOME`，而 dsh 把「文档目录 == HOME」判为不可用 → 默认工作区建不出来。
+  0.6.6 起 `cmd/main` 在启动前写这份文件（`XDG_DOCUMENTS_DIR=<共享目录根>`）并钉住
+  `XDG_CONFIG_HOME`，于是两者解耦：**数据**仍在 `.dsh-home`，**默认工作区**落在
+  `共享目录/deepseek-harness/default-workspace`（文件管理里可见）。
 
 **补充实测（2026-10-27 18:42，真正的「界面卸载 → 重装」闭环）**——上面那张表要修正：
 `install-local` 的隐式卸载**绕过了卸载向导**，属于强制清除，所以它看到的“全删”不能代表界面卸载。

@@ -186,6 +186,80 @@ else
   check "工作目录取自 data-share" "yes" "$(grep -o 'cwd=[^ ]*' "$ROOT/var/info.log" 2>/dev/null | tail -n1 || echo '<无 cwd 行>')"
 fi
 
+step "默认工作区（F22：文档目录 / 注册表）"
+# dsh 的默认工作区 = <文档目录>/deepseek-harness/default-workspace，
+# 而 linux 上文档目录靠 xdg-user-dir 读 $HOME/.config/user-dirs.dirs。
+# 缺这个文件时它回显 $HOME，dsh 判定「文档目录不可用」→ 首启建不出默认工作区。
+# 这一段盯住我们补写的那份文件，以及注册表补登记的幂等性。
+XDG_FILE="$HOME_DIR/.config/user-dirs.dirs"
+check "user-dirs.dirs 已写" "yes" "$([ -f "$XDG_FILE" ] && echo yes || echo no)"
+XDG_VAL="$(grep -E '^XDG_DOCUMENTS_DIR=' "$XDG_FILE" 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '"\r')"
+check "文档目录 = 共享目录" "$ROOT/shares/workspace" "$XDG_VAL"
+check "文档目录不是 HOME（dsh 才认）" "yes" \
+  "$([ -n "$XDG_VAL" ] && [ "$XDG_VAL" != "$HOME_DIR" ] && echo yes || echo no)"
+check "默认工作区目录已建" "yes" \
+  "$([ -d "$ROOT/shares/workspace/deepseek-harness/default-workspace" ] && echo yes || echo no)"
+
+# ---- 注册表补登记：老用户升级时 dsh 自己不会再建，只能我们补 ----
+N2="${DSH_TEST_NODE:-$(command -v node 2>/dev/null || true)}"
+if [ -z "${N2:-}" ]; then
+  SKIP=$((SKIP + 7))
+  printf '  \033[33mSKIP\033[0m  注册表补登记（没有 node 可用于跑 helper）\n'
+else
+  WS="$HOME_DIR/storages/workspace.json"
+  OLD_ID="11111111-1111-4111-8111-111111111111"
+  mkdir -p "$HOME_DIR/storages" "$HOME_DIR/Project"
+  cat >"$WS" <<JSON
+{
+ "unit": { "name": "workspace", "version": 2 },
+ "global": {
+  "initialized": true,
+  "workspaceIds": ["$OLD_ID"],
+  "archivedSessionIds": [],
+  "pinnedSessionIds": []
+ },
+ "tables": {
+  "workspaces": {
+   "$OLD_ID": {
+    "path": "$HOME_DIR/Project",
+    "title": "Project",
+    "sessionIds": ["session-keep-me"],
+    "createdAt": "2026-10-27T10:56:17.687Z",
+    "updatedAt": "2026-10-28T05:27:18.454Z"
+   }
+  }
+ }
+}
+JSON
+
+  # 在 JSON 上取一个字段（只在测试里用 eval，别处不要学）
+  ws_get() { # $1=js 表达式，变量名 d
+    "$N2" -e 'const fs=require("fs");const d=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));let v;try{v=eval(process.argv[2])}catch(e){v="ERR:"+e.message};console.log(typeof v==="object"?JSON.stringify(v):String(v))' "$WS" "$1"
+  }
+
+  OUT1="$("$N2" "$HERE/cmd/ensure-default-workspace.mjs" --registry "$WS" \
+           --dir "$ROOT/shares/workspace/deepseek-harness/default-workspace" 2>&1)"
+  check "helper 首次运行成功" "yes" "$(case "$OUT1" in created\ *) echo yes ;; *) echo no ;; esac)"
+  check "已写入 defaultWorkspaceId" "true" "$(ws_get '!!d.global.defaultWorkspaceId')"
+  check "新条目 title 用 dsh 的英文常量" "default-workspace" \
+    "$(ws_get 'd.tables.workspaces[d.global.defaultWorkspaceId].title')"
+  check "新条目路径名正确" "default-workspace" \
+    "$(ws_get 'String(d.tables.workspaces[d.global.defaultWorkspaceId].path).split(/[\\\\/]/).pop()')"
+  check "原有会话未被破坏" "session-keep-me" \
+    "$(ws_get "d.tables.workspaces[\"$OLD_ID\"].sessionIds[0]")"
+  check "新登记排在首位（与 createCanonical 一致）" "true" \
+    "$(ws_get 'd.global.workspaceIds[0]===d.global.defaultWorkspaceId')"
+
+  # 幂等：再跑一次不能产生第二条，也不能改掉已有默认项
+  OUT2="$("$N2" "$HERE/cmd/ensure-default-workspace.mjs" --registry "$WS" \
+           --dir "$ROOT/shares/workspace/deepseek-harness/default-workspace" 2>&1)"
+  check "重复运行不新增（幂等）" "2" "$(ws_get 'd.global.workspaceIds.length')"
+  case "$OUT2" in
+    skip:*) : ;;
+    *) say "    期望 skip，实际：$OUT2" ;;
+  esac
+fi
+
 step "main status（应为运行中）"
 lc "$HERE/cmd/main" status
 check_linux "status 退出码 = 0（运行中）" "0" "$?"

@@ -20,6 +20,10 @@ set -u
 APPNAME="dsh"
 SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 
+# 应用用户（平台通过 TRIM_USERNAME 给出）。我们以 root 运行时，
+# 自己创建的文件必须显式交给它，否则 dsh 写不进去。
+DSH_USER="${TRIM_USERNAME:-dsh}"
+
 # ---- 路径（一律从 TRIM_* 派生；缺省值只用于本机调试） ----
 APPDEST="${TRIM_APPDEST:-$SELF_DIR/../target}"
 PKGVAR="${TRIM_PKGVAR:-$SELF_DIR/../var}"
@@ -43,6 +47,21 @@ else
   DSH_HOME="$PKGVAR/dsh-home"
 fi
 unset _share _p
+
+# dsh 的默认工作区固定在 <系统文档目录>/deepseek-harness/default-workspace（见 F22）。
+# 文档目录在 linux 上由 xdg-user-dir 读 $HOME/.config/user-dirs.dirs 得到。
+DOCS_FILE="$DSH_HOME/.config/user-dirs.dirs"
+DEFAULT_WS_REL="deepseek-harness/default-workspace"
+DSH_DEFAULT_WS=""
+
+# 组名不一定跟着 TRIM_* 一起传进来。DSH_HOME 已存在时以它的属组为准，
+# 免得分给我们新建的目录改成 dsh 组，与平台的 dsh:AppUsers 不一致。
+if [ -n "${TRIM_GROUPNAME:-}" ]; then
+  DSH_GROUP="$TRIM_GROUPNAME"
+else
+  DSH_GROUP="$(stat -c '%G' "$DSH_HOME" 2>/dev/null || true)"
+  [ -n "${DSH_GROUP:-}" ] || DSH_GROUP="$DSH_USER"
+fi
 
 PIDFILE="$PKGVAR/dsh.pid"
 LOGFILE="$PKGVAR/info.log"
@@ -243,6 +262,124 @@ resolve_workspace() {
     [ -d "$p" ] && { printf '%s' "$p"; return 0; }
   done
   printf '%s' "$DSH_HOME"
+}
+
+# ---------------------------------------------------------------- 默认工作区
+#
+# 背景（docs/ISSUES.md F22）：dsh 的默认工作区路径是
+#   <系统文档目录>/deepseek-harness/default-workspace
+# linux 上「系统文档目录」由 `xdg-user-dir DOCUMENTS` 解析，而它只读
+# $HOME/.config/user-dirs.dirs。这个文件不存在时，xdg-user-dir 会原样回显
+# $HOME（我们真机实测：输出 /vol1/.../workspace/.dsh-home），dsh 又把
+# 「文档目录 == HOME」判为不可用并抛 system Documents directory is unavailable，
+# 于是首启的 initializeDefault 失败，前端只剩一句「无法创建默认工作区」。
+# 修法：启动前把 user-dirs.dirs 写好，让 dsh 自己的逻辑能跑通。
+
+docs_base() {
+  local p
+  p="$(resolve_workspace)"
+  if [ "$p" = "$DSH_HOME" ]; then
+    # 共享目录不可用：退成 HOME 的兄弟目录。绝不能让文档目录等于 HOME，
+    # 那正是 dsh 判为「不可用」的条件。
+    dirname "$DSH_HOME"
+  else
+    printf '%s' "$p"
+  fi
+}
+
+own_by_app() { # $@=路径（不递归，只改我们自己创建的那几项）
+  [ "$(id -u)" = "0" ] || return 0
+  [ -n "${DSH_USER:-}" ] || return 0
+  local p
+  for p in "$@"; do
+    [ -e "$p" ] || continue
+    chown "$DSH_USER:$DSH_GROUP" "$p" 2>/dev/null \
+      || log "WARN: chown $p 失败（dsh 可能写不进去）"
+  done
+  return 0
+}
+
+ensure_documents_dir() {
+  local base cfgdir harness wsdir current
+  base="$(docs_base)"
+  if [ -z "$base" ]; then
+    log "WARN: 无法确定文档目录，默认工作区可能建不出来"
+    return 0
+  fi
+  cfgdir="$DSH_HOME/.config"
+  harness="$base/deepseek-harness"
+  wsdir="$harness/default-workspace"
+
+  if ! mkdir -p "$cfgdir" 2>/dev/null; then
+    log "WARN: 无法创建 $cfgdir，默认工作区可能建不出来"
+    return 0
+  fi
+
+  current=""
+  if [ -f "$DOCS_FILE" ]; then
+    current="$(grep -E '^XDG_DOCUMENTS_DIR=' "$DOCS_FILE" 2>/dev/null \
+               | tail -n1 | cut -d= -f2- | tr -d '"\r')"
+  fi
+  if [ "$current" != "$base" ]; then
+    if {
+      printf '# 由 dsh fpk 生成：给 dsh 一个可用的「文档目录」。\n'
+      printf '# 删掉它，xdg-user-dir 会退回 $HOME，dsh 判定文档目录不可用，\n'
+      printf '# 首启就建不出默认工作区（docs/ISSUES.md F22）。\n'
+      printf 'XDG_DOCUMENTS_DIR="%s"\n' "$base"
+    } >"$DOCS_FILE" 2>/dev/null; then
+      chmod 600 "$DOCS_FILE" 2>/dev/null
+      own_by_app "$cfgdir" "$DOCS_FILE"
+      log "docs: XDG_DOCUMENTS_DIR=$base"
+    else
+      log "WARN: 无法写入 $DOCS_FILE，默认工作区可能建不出来"
+      return 0
+    fi
+  fi
+
+  if mkdir -p "$wsdir" 2>/dev/null; then
+    own_by_app "$harness" "$wsdir"
+    DSH_DEFAULT_WS="$wsdir"
+    log "docs: base=$base default_ws=$wsdir"
+  else
+    log "WARN: 无法创建默认工作区目录 $wsdir"
+  fi
+  return 0
+}
+
+# dsh 只在「注册表 + 会话历史双空」时自动创建默认工作区，错过就不再创建
+# （dsh-workspace/lib/index.js 的 initializeDefault 守卫）。老用户升级时注册表
+# 必然非空，只能由我们补登记。必须在没有 dsh 进程在跑的时候改，否则会被内存
+# 里的状态覆盖 —— do_start 走到这里时已经过了 is_running 的早退，满足条件。
+ensure_default_workspace() {
+  local wsjson helper out
+  wsjson="$DSH_HOME/storages/workspace.json"
+  if [ -z "$DSH_DEFAULT_WS" ]; then
+    log "default-ws: 没有可用的默认工作区目录，跳过"
+    return 0
+  fi
+  if [ ! -f "$wsjson" ]; then
+    log "default-ws: 尚无注册表，留给 dsh 首启自建"
+    return 0
+  fi
+  helper="$SELF_DIR/ensure-default-workspace.mjs"
+  if [ ! -f "$helper" ]; then
+    log "WARN: 缺少 $helper，跳过默认工作区登记"
+    return 0
+  fi
+  if [ -z "${NODE_BIN:-}" ] || [ ! -x "$NODE_BIN" ]; then
+    log "WARN: 没有可用的 node，跳过默认工作区登记"
+    return 0
+  fi
+
+  out="$("$NODE_BIN" "$helper" --registry "$wsjson" --dir "$DSH_DEFAULT_WS" 2>&1)"
+  log "default-ws: ${out:-（无输出）}"
+  case "$out" in
+    created*|defaulted*)
+      chmod 600 "$wsjson" 2>/dev/null
+      own_by_app "$wsjson" "${wsjson}.bak"
+      ;;
+  esac
+  return 0
 }
 
 rotate_log() {
@@ -487,6 +624,13 @@ do_start() {
   chmod 700 "$DSH_HOME" 2>/dev/null
   rotate_log
 
+  # 必须在拉起 dsh 之前做完（F22）：
+  #   1) 文档目录可解析 —— 否则 dsh 首启建不出默认工作区；
+  #   2) 老用户补登记默认工作区 —— 注册表非空时 dsh 自己不会再建。
+  # 这里已经过了 is_running 的早退，确定没有 dsh 进程在跑，改注册表才安全。
+  ensure_documents_dir
+  ensure_default_workspace
+
   # 记下当前日志长度：抓 token 时只看本次启动新增的部分。
   # 否则 grep 整个日志会命中上一次的 URL —— 那个 token 早已随旧进程失效。
   local logoff=0
@@ -506,6 +650,9 @@ do_start() {
     export DSH_HOME
     # dsh 会往 HOME 下写缓存/凭据，不设就可能落到 /root 或应用用户的默认家目录（不可写）
     export HOME="$DSH_HOME"
+    # xdg-user-dir 读 $XDG_CONFIG_HOME/user-dirs.dirs，不设就用 ~/.config。
+    # 这里钉死，保证它读到的就是我们写的那份（外部环境若设了别的值会让我们白写）。
+    export XDG_CONFIG_HOME="$DSH_HOME/.config"
     if [ -n "${DSH_API_KEY:-}" ]; then export DEEPSEEK_API_KEY="$DSH_API_KEY"; fi
     log "start: mode=dsh entry=$entry"
     # 跳转器先起：它占着 service_port，端口冲突要在这一步就暴露，

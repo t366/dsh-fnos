@@ -42,6 +42,7 @@
 | F18 | stop 报成功但进程还活着 → start 只回 10330 | 缺陷 | ✅ | `cmd/main` `is_alive()` 复核 + 失败上报 |
 | F20 | 版本守卫与包落点只认 `/var/apps/<app>`，会双双失效 | 缺陷（构建） | ✅ | `build.sh` 三处探测 + 落点加 `@appshare` + 打印 `cp` |
 | F21 | 图标在应用中心发虚，四轮才找到根因 | 缺陷（视觉） | ✅ | 根因是拿官网 favicon(50×50 细线条) 当图标；0.6.5 原样改用官方 `icon-512.png`，用户实测「好很多」 |
+| F22 | 没有默认工作区：`xdg-user-dir` 回显 `$HOME`，dsh 判「文档目录不可用」 | 缺陷（启动） | ⚠️ | `cmd/main` `ensure_documents_dir()` + `ensure_default_workspace()`；**待装 0.6.6 验证** |
 | T1 | 0.5.0 打包与真机安装 | — | ✅ | `probe/05` 33 PASS / 1 WARN / 0 FAIL |
 | T2 | cookie 跨重启 / 令牌是否一次性 | — | ✅ | `probe/07` 10 PASS：令牌可复用、cookie 跨重启存活 |
 | T3 | 端口写死 3080，不可配置 | — | 📋 | 改端口=卸载重装 |
@@ -57,7 +58,7 @@
 
 ## 当前剩余问题（按优先级）
 
-> 截至 2026-10-28 01:05。真机已装 **`0.6.5`**（覆盖安装，平台自己重启了进程）。
+> 截至 2026-10-28 23:20。真机已装 **`0.6.5`**；**`0.6.6`（F22 默认工作区）待打包安装**。
 > 只列**还没关闭**的项；已修缺陷见第二节，平台限制见第一节。
 >
 > **已关闭（最近）**：P0 实例归属、F16 的 root 文件残留、T1 / T2（0.5.0 装机验收）、
@@ -83,6 +84,7 @@
 
 | 项 | 判据 | 前置 |
 |---|---|---|
+| **F22 默认工作区** | 装 0.6.6 后工作区下拉里出现「默认工作区」且处于勾选态；`grep XDG_DOCUMENTS_DIR /vol1/@appshare/dsh/workspace/.dsh-home/.config/user-dirs.dirs` 指向共享目录；原 `Project` 与旧会话仍在 | 装 0.6.6 |
 | 历史会话是否还在 | 由**平台**启动后，侧栏旧会话仍在 | 现在就能验 |
 | T5 解包峰值 | 安装时轮询 `df`，峰值不超 1.5GB 阈值余量 | 下一次安装 |
 | **T6 双网卡** | 从 `.109` 与 `.114` 两侧都能打开入口 | **当前 `.109` 不通**（见下） |
@@ -674,6 +676,50 @@ ls /var/apps/dsh/var/dsh.pid            → No such file
 
 1. `ICON.PNG` 的 64×64 不是安装器硬约束（有 640、128 的先例），放开尺寸是安全的；
 2. 对比度决定小尺寸锐度：浅底 + 深色实体色块约 18:1，品牌蓝配白底只有 4.3:1。
+
+### F22 「没有默认工作区」：dsh 的初始化被 HOME 布局挡住 ⚠️（0.6.6 待装包验证）
+
+**现象**：点图标进 dsh，工作区下拉里只有自己建的 `Project` 和「+ 添加工作区…」，
+内置的「默认工作区」不存在。
+
+**根因链**（每一环都有真机输出作证，不是推断）：
+
+1. `dsh-api-workspace-controller` 的 `defaultWorkspaceDirectory()` 在 linux 上执行
+   `xdg-user-dir DOCUMENTS`，然后拼成 `<文档目录>/deepseek-harness/default-workspace`
+   （`DEFAULT_WORKSPACE_DIRECTORY = "default-workspace"`）。
+2. `xdg-user-dir` **只读** `$XDG_CONFIG_HOME/user-dirs.dirs`（默认 `~/.config/user-dirs.dirs`），
+   不读同名环境变量。我们的 `HOME` 是 `.../workspace/.dsh-home`，里面没有 `.config`。
+3. 文件缺失时它**原样回显 `$HOME`**——实测输出 `/vol1/@appshare/dsh/workspace/.dsh-home`。
+4. dsh 紧接着判 `directory === homedir()`，命中即抛
+   `system Documents directory is unavailable`。
+5. `workspaceRegistry.initializeDefault()` 因此不创建，前端只弹一条
+   `defaultWorkspace.failed`：「无法创建默认工作区，请通过“选择工作区”选择文件夹」。
+6. **最要命的是它只尝试一次**：守卫条件是「`workspaceIds` 空 + 无归档 + 无会话」。
+   只要手动加过工作区或聊过一句，自动创建就**永久失效**
+   （源码注释：*deleting that registration permanently disables automatic creation*）。
+   所以「删掉 Project 再重建」也换不回来，只会连会话一起丢。
+
+**为什么开发机上是好的**：win32 分支走 `powershell.exe` 取 `MyDocuments`，永远有值，
+与 HOME 无关。这是**纯 linux / 无桌面环境**才踩到的坑，又被我们「HOME 塞进共享目录」
+的布局放大了一档。
+
+**修法（0.6.6）**：
+
+| 改动 | 位置 | 作用 |
+|---|---|---|
+| `ensure_documents_dir()`：写 `$HOME/.config/user-dirs.dirs`（`XDG_DOCUMENTS_DIR=<共享目录>`）、建 `<共享目录>/deepseek-harness/default-workspace`、属主交 `dsh:AppUsers`、`export XDG_CONFIG_HOME=$HOME/.config` | `cmd/main` | 治本：让 dsh 自己的 `initializeDefault` 跑通 |
+| `ensure_default_workspace()` + `cmd/ensure-default-workspace.mjs` | `cmd/main` | 治标：注册表已非空的老用户，停机状态下按 canonical 路径去重合并，补一条 `title="default-workspace"` 并写 `defaultWorkspaceId` |
+| 11 条断言（文档目录取值 ≠ HOME、目录已建、补登记幂等、原有会话未被破坏） | `fpk/selftest.sh` | 防回归 |
+
+**三个必须记住的约束**：
+
+1. `title` 只能用英文常量 `default-workspace`。前端 `workspaceDisplayTitle()` 拿它比对后
+   才本地化成「默认工作区」；直接写中文会变成一条普通工作区，名字对了但“默认”语义没了。
+2. 补登记**必须在 dsh 停止时**做。注册表由 `dsh-storage-json` 管，dsh 内存里有副本，
+   运行中改会被覆盖甚至写坏。`do_start` 里放在 `is_running` 早退之后、`spawn` 之前，
+   正好满足。
+3. 路径必须 `realpath` 之后再写。dsh 的唯一性判据是「canonical 字符串相等」，
+   写非规范路径会造出重复工作区。
 
 
 ---

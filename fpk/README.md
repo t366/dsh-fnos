@@ -73,6 +73,26 @@ dsh 每次启动都会 mint 新 token，且没有「固定令牌」开关，所�
 `X-Forwarded-For` / `X-Real-IP` / `Forwarded` 这类代理头，就一律按"来自反代"处理、要求配对**
 （否则反代一挂，公网访客会被当成内网）。这两点都写在代码里，不依赖用户记得。
 
+## 默认工作区（0.6.6 起）
+
+dsh 的默认工作区固定在 `<系统文档目录>/deepseek-harness/default-workspace`。本封装把它
+落到**共享目录**里，所以在文件管理里看得见、能直接往里放文件：
+
+```
+/vol1/@appshare/dsh/workspace/deepseek-harness/default-workspace
+```
+
+为什么需要专门处理：dsh 在 linux 上靠 `xdg-user-dir DOCUMENTS` 找文档目录，而那个命令只读
+`$HOME/.config/user-dirs.dirs`。文件不存在时它会**原样回显 `$HOME`**，dsh 立刻把
+「文档目录 == HOME」判定为不可用并抛错，首启建不出默认工作区 —— 界面上就只剩
+「+ 添加工作区…」。启动脚本因此在拉起 dsh 前写这份文件（`XDG_DOCUMENTS_DIR=<共享目录>`），
+并把 `XDG_CONFIG_HOME` 钉死在这里。**不要删**
+`dsh/workspace/.dsh-home/.config/user-dirs.dirs`。
+
+已经用过一段时间的实例（有工作区或聊过天），dsh 自己不会再补建（它只在注册表与会话历史
+双空时创建一次）。启动脚本会在**停机状态**下往 `storages/workspace.json` 补一条登记：
+只加不改、按 canonical 路径去重、幂等、写前留 `.bak`，原有工作区与会话不受影响。
+
 ## 排错
 
 ```bash
@@ -119,6 +139,7 @@ bash ~/dsh-fnos/probe/07-cookie-persistence.sh # 重启后点图标还能不能�
 | `config/privilege` | `run-as: package`，专用用户 `dsh`。**不用 root** |
 | `config/resource` | 声明共享目录 `dsh/workspace`，用户可在文件管理里看到 |
 | `cmd/main` | 核心。`start\|stop\|status\|restart\|url`，status 返回 0/1/3 |
+| `cmd/ensure-default-workspace.mjs` | 启动前补登记默认工作区（老用户升级；只加不改、幂等） |
 | `cmd/install_init` | 架构、磁盘（≥1.5GB）、landlock/bwrap 检查 |
 | `cmd/install_callback` | 建 `dsh-home`(700)、写 `settings.conf`(600)、chown 给应用用户 |
 | `cmd/config_callback` | 改设置：合并配置 → stop → start（入口模式是启动参数） |

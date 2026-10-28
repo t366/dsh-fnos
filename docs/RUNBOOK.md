@@ -235,6 +235,34 @@ curl -s -o /dev/null -w 'proxied=%{http_code}\n' -H 'X-Forwarded-For: 1.2.3.4' h
 
 ---
 
+### 5.2　F22 默认工作区是否真的建出来了（0.6.6 起）
+
+```bash
+H=/vol1/@appshare/dsh/workspace/.dsh-home
+
+# 1) 前置条件：文档目录必须指向共享目录，且不能等于 dsh 的 HOME（等于 HOME 就会被判不可用）
+cat "$H/.config/user-dirs.dirs"
+
+# 2) 目录本身
+ls -ld /vol1/@appshare/dsh/workspace/deepseek-harness/default-workspace
+
+# 3) 注册表：应出现 defaultWorkspaceId，且原有工作区/会话没被动过
+grep -o '"defaultWorkspaceId": *"[^"]*"' "$H/storages/workspace.json"
+grep -c '"path"' "$H/storages/workspace.json"
+```
+
+判据：
+
+- `XDG_DOCUMENTS_DIR` = `/vol1/@appshare/dsh/workspace`（**不能**是 `.../.dsh-home`）；
+- 目录存在，属主 `dsh:AppUsers`；
+- `workspace.json` 里有 `defaultWorkspaceId`；工作区条数 = 原有条数 + 1（补登记只在缺默认项时发生）；
+- 界面：工作区下拉里出现「默认工作区」并处于勾选态，原来的 `Project` 与旧会话都在。
+
+> 补登记需要一次**真正的重启**（`start` 走到 `spawn` 之前才会执行）。覆盖升级后平台会自己
+> 重启进程；如果是手动验证，用 `appcenter-cli stop dsh && appcenter-cli start dsh`。
+
+---
+
 ## 第 6 步　回归 T2：令牌是否一次性、cookie 能否活过重启
 
 ```bash

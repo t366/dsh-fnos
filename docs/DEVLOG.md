@@ -460,6 +460,49 @@ F15 权限位判断 + `probe/05` 取最后一条日志。自测 **32 通过 / 22
 以及 `probe/05` 的 workspace 误报。
 
 
+## 阶段 21：0.6.6 —— 「没有默认工作区」（2026-10-28 23:20）
+
+用户报「缺少默认工作区」，附截图：工作区下拉里只有他自己建的 `Project` 和
+「+ 添加工作区…」，没有内置的「默认工作区」。
+
+**先排除误判**：`storages/workspace.json` 结构正常（`initialized: true`、一条 `Project`、
+4 个会话），`.dsh-home` 属主与权限都对，启动日志无异常。所以不是数据目录缺失，
+也不是我们封装漏了什么文件。
+
+**逐层定位**（每一层都是真机输出，不是猜）：
+
+1. dsh 是 cordis 插件架构，工作区逻辑在 `@deepseek-ai/dsh-workspace` 与
+   `dsh-api-workspace-controller`，不在入口壳 `dsh/lib` 里 —— 前两轮 grep 因此一无所获。
+2. `initializeDefault()` 的守卫是「注册表 + 会话历史双空」，我们这台早已非空 →
+   **它不会再补建**，这解释了「为什么现在没有」，但解释不了「首启为什么没建」。
+3. 继续看 `defaultWorkspaceDirectory()`：linux 下执行 `xdg-user-dir DOCUMENTS`，
+   实测该命令输出 `/vol1/@appshare/dsh/workspace/.dsh-home` —— **正好等于 `homedir()`**，
+   下一行就 `throw new Error("system Documents directory is unavailable")`。
+4. 根因是 `xdg-user-dir` 只读 `$HOME/.config/user-dirs.dirs`，文件不存在时**回显 `$HOME`**；
+   而我们的 `HOME` 就是 `.dsh-home`，里面没有 `.config`。开发机 Windows 走
+   `powershell.exe` 取 `MyDocuments`，所以从来没暴露过。
+
+**修法两条，一条治本一条治标**（只做前者对已装实例无效，只做后者只救个案）：
+
+- 治本：启动前写 `$HOME/.config/user-dirs.dirs`（`XDG_DOCUMENTS_DIR=<共享目录>`）、
+  建好 `<共享目录>/deepseek-harness/default-workspace`、属主交应用用户，并钉住
+  `XDG_CONFIG_HOME`。这样 dsh 自己的 `initializeDefault` 就能跑通。
+- 治标：新增 `cmd/ensure-default-workspace.mjs`，在 dsh 停止时按 canonical 路径去重合并
+  注册表，补一条 `title="default-workspace"` 并写 `defaultWorkspaceId`。只加不改、幂等、
+  写前留 `.bak`、结构不认识就不动。
+
+**两个容易写错的地方，记下来**：
+
+1. `title` 必须是英文常量 `default-workspace`。前端拿它比对后才本地化成「默认工作区」，
+   直接写中文会变成一条普通工作区。
+2. 补登记只能在 dsh 停止时做。注册表是 `dsh-storage-json` 管的版本化存储，dsh 内存里有
+   副本，运行中改会被覆盖。`do_start` 里放在 `is_running` 早退之后、`spawn` 之前。
+
+**验证**：`bash fpk/selftest.sh` → **43 通过 / 22 跳过 / 0 失败**（新增 11 条：文档目录取值、
+不等于 HOME、目录已建、补登记幂等、原会话未被破坏、新登记排首位）。
+真机验证待装 0.6.6，判据写进 ISSUES 的 P2。
+
+
 ## 下一步
 
 **待办不再在这里维护**——统一见 [ISSUES.md](ISSUES.md) 的「当前剩余问题（P0–P3）」。
@@ -467,7 +510,6 @@ DEVLOG 只记已经发生的事，避免两处列表各说一套。
 
 当前动作只有一件：
 
-> **0.6.5 已装，跑一次全量验收** —— `bash probe/05-verify-fpk.sh`，看 `FAIL 0`、
-> 「包图标 ICON.PNG 512x512」、「入口图标像素充足」，以及 F15 那条密钥权限 WARN 是否消失
-> （`stat -c '%a' /var/apps/dsh/var/launcher-secret` 期望 `600`）。
-> 升级流程已确认可覆盖安装（T11），不用再卸载。
+> **在 NAS 上打 0.6.6 并覆盖安装** —— `cd ~/dsh-fnos && git pull && cd fpk && bash build.sh full`，
+> 然后应用中心「手动安装」选新包（覆盖升级不用卸载）。装完看两件事：
+> 工作区下拉里是否出现「默认工作区」且被勾选；原来的 `Project` 与 4 个会话是否还在。

@@ -181,6 +181,34 @@ else
   warn "dsh-home 不存在" "install_callback 可能没执行或提前失败，看 var/info.log"
 fi
 
+# 默认工作区（F22）：dsh 在 linux 上靠 `xdg-user-dir DOCUMENTS` 找文档目录，而它只读
+# $HOME/.config/user-dirs.dirs。文件缺失时它会回显 $HOME，dsh 立刻判「文档目录不可用」，
+# 首启建不出默认工作区 —— 界面表现就是下拉里只有「+ 添加工作区…」。
+if [ -d "$HOME_SHARE" ]; then
+  XDG_F="$HOME_SHARE/.config/user-dirs.dirs"
+  XDG_V=""
+  [ -f "$XDG_F" ] && XDG_V="$(grep -E '^XDG_DOCUMENTS_DIR=' "$XDG_F" 2>/dev/null \
+                              | tail -n1 | cut -d= -f2- | tr -d '"\r')"
+  case "$XDG_V" in
+    ""|"$HOME_SHARE")
+      warn "默认工作区前置条件不满足（XDG_DOCUMENTS_DIR=${XDG_V:-未设置}）" \
+        "dsh 会判定「文档目录不可用」；0.6.6 起由 cmd/main 自动写 $XDG_F"
+      ;;
+    *)
+      ok "默认工作区前置条件满足（XDG_DOCUMENTS_DIR=$XDG_V）"
+      ;;
+  esac
+  WSJ="$HOME_SHARE/storages/workspace.json"
+  if [ -f "$WSJ" ]; then
+    if grep -q '"defaultWorkspaceId"' "$WSJ" 2>/dev/null; then
+      ok "注册表里有默认工作区（defaultWorkspaceId）"
+    else
+      warn "注册表里没有 defaultWorkspaceId" \
+        "0.6.6 起启动时会自动补登记；重启一次应用再看"
+    fi
+  fi
+fi
+
 echo "--- 共享目录（resource.data-share）---"
 SHARE=""
 for d in "$ROOT/share/workspace" "$ROOT/shares/workspace" "$ROOT/share" "$ROOT/shares"; do

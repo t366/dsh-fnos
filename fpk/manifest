@@ -1,5 +1,5 @@
 appname="dsh"
-version="0.6.5"
+version="0.6.6"
 display_name="DeepSeek Harness"
 desc="DeepSeek 开源的 agent harness（dsh）。以本地 Web 界面提供 AI 编程智能体，支持工具调用、终端与文件操作，仅限局域网访问。"
 source="thirdparty"
@@ -18,4 +18,4 @@ checkport="true"
 service_port="3080"
 disable_authorization_path="true"
 
-changelog="0.6.5：图标改用 DeepSeek 官方仓库的成品应用图标，原样复制、不缩放不调色、不重新设计。来源是 apps/web/public/icon-512.png（512×512），四个位置放的是同一个文件，SHA-256 完全一致。之前几轮我一直拿官网的 favicon.svg——那只是站点小标（50×50 的蓝鲸线条），而官方桌面端和网页应用真正用的应用图标是另一种：浅色底配深色鲸鱼，实体色块、对比极强。换成这个之后图标与官方产品保持完全一致。"
+changelog="0.6.6：修掉「没有默认工作区」。dsh 的默认工作区固定在 <系统文档目录>/deepseek-harness/default-workspace，linux 上文档目录由 xdg-user-dir 读 $HOME/.config/user-dirs.dirs 得到；该文件不存在时它会原样回显 $HOME，而 dsh 把「文档目录 == HOME」判定为不可用并抛错，首启的 initializeDefault 于是失败，前端只剩一句「无法创建默认工作区」。现在启动前会写好这份文件（指向共享目录）并钉住 XDG_CONFIG_HOME，让 dsh 自己的逻辑跑通；已经用过一段时间的实例，dsh 不会再自动补建（它只在注册表与会话历史双空时创建一次），所以启动前还会在停机状态下按 canonical 路径去重合并进 storages/workspace.json，补一条 title 为 default-workspace 的登记并写入 defaultWorkspaceId，原有工作区与会话不受影响，重复执行幂等。"

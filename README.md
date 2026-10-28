@@ -11,9 +11,10 @@
 
 | 项 | 值 |
 |---|---|
-| 包版本 | **0.6.5**（真机已装并验收） |
+| 包版本 | **0.6.6**（源码就绪，**待 NAS 上打包与真机验证**） |
 | 最近一次完整真机验收 | **0.6.5**：图标与启停入口均已确认；0.5.0 时为 `probe/05` **33 PASS / 1 WARN / 0 FAIL**、`probe/07` **10 PASS / 0 FAIL**。待验项见 [ISSUES 的 P1/P2](docs/ISSUES.md) |
 | 数据落点 | 共享目录 `dsh/workspace/.dsh-home`（**跨卸载存活**，已实测） |
+| 默认工作区 | `dsh/workspace/deepseek-harness/default-workspace`（0.6.6 起自动建；原理见 [ISSUES F22](docs/ISSUES.md)） |
 | 运行时 | 自带 Node 24（`v24.22.1`）+ `@deepseek-ai/dsh@0.2.1-rc.3`（钉版理由见 [PLAN §3.2](PLAN.md)） |
 | 尺寸 | 包内 `app/` **977MB / 63054 个文件**；fnpack 压出的 **`dsh.fpk` 199MB**；装完实测 **957M / 63056 个文件**（`du -sh /vol1/@appcenter/dsh`，不含软链的 `/var/apps/dsh`） |
 | 已知问题 | 见 [docs/ISSUES.md](docs/ISSUES.md) |
@@ -95,5 +96,6 @@ bash ~/dsh-fnos/probe/07-cookie-persistence.sh  # 会重启一次应用，验证
 - **可执行位**：`cmd/*` 必须有 x 位，`build.sh` 每次都会补；在 Windows 上编辑后别指望它自己保留。
 - **版本号**：改 `manifest` 的 `version` 才叫新版本。同版本重装会被应用中心静默跳过。
 - **改脚本前先跑本地自测**：`bash fpk/selftest.sh`。Windows 上应为
-  **29 通过 / 22 跳过 / 0 失败**（22 项是权限位、`/proc`、进程组这类 Linux 专属断言）；
-  Linux 上应全绿。若在 Windows 上看到共享目录相关的失败，先确认是不是用了旧脚本。
+  **43 通过 / 22 跳过 / 0 失败**（22 项是权限位、`/proc`、进程组这类 Linux 专属断言）；
+  Linux 上应全绿（数量比 Windows 多 13 项 dsh 模式编排）。若在 Windows 上看到共享目录相关的
+  失败，先确认是不是用了旧脚本。
