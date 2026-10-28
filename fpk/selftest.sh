@@ -98,6 +98,7 @@ lc() { # 用伪造的 TRIM_* 环境执行生命周期脚本
     TRIM_USERNAME="$(id -un)" \
     TRIM_GROUPNAME="$(id -gn)" \
     TRIM_DATA_SHARE_PATHS="$ROOT/shares/workspace" \
+    TRIM_DATA_ACCESSIBLE_PATHS="${TEST_ACCESSIBLE_PATHS-$ROOT/shares/workspace:$ROOT/shares/not-there}" \
     dsh_bind="${TEST_BIND-127.0.0.1}" \
     dsh_port="$PORT" \
     dsh_apikey="${TEST_API_KEY:-}" \
@@ -259,6 +260,22 @@ JSON
     *) say "    期望 skip，实际：$OUT2" ;;
   esac
 fi
+
+step "授权目录（F23：访问权限 → 可当工作区）"
+# dsh 是通用工作台：用户必须能把「我的文件」里的任意文件夹授权给应用、再当工作区用。
+# manifest 的 disable_authorization_path 一旦关掉，应用设置里连「访问权限」页都没有，
+# 这条路就断了（0.6.6 及以前就是关着的）。这里同时盯住开关与启动时对授权路径的记录：
+# 日志是排错的第一现场 —— 没授权 / 平台没传 / ACL 没生效，三种情况分得开。
+check "manifest 保留了授权目录设置" "yes" \
+  "$(grep -qE '^[[:space:]]*disable_authorization_path[[:space:]]*=[[:space:]]*"?false"?[[:space:]]*$' "$HERE/manifest" && echo yes || echo no)"
+check "启动日志记录了授权路径" "yes" \
+  "$(grep -q 'auth-paths: ' "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
+check "已授权且可写的目录记为读写" "yes" \
+  "$(grep -qF "auth-paths: $ROOT/shares/workspace （读写）" "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
+check "不存在的授权路径单独标出" "yes" \
+  "$(grep -qF "auth-paths: $ROOT/shares/not-there （不存在）" "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
+check "授权路径条数已统计" "yes" \
+  "$(grep -q 'auth-paths: 共 2 条' "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
 
 step "main status（应为运行中）"
 lc "$HERE/cmd/main" status

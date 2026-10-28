@@ -270,6 +270,27 @@ else
   bad "三处端口不一致" "症状是「能启动但点图标打不开」，且 checkport 会检查错端口"
 fi
 
+# 授权目录（F23）：dsh 是通用工作台，用户得能把「我的文件」里的文件夹授权给应用、
+# 再在 dsh 里「+ 添加工作区」选中。这个面板由 manifest 的 disable_authorization_path
+# 控制：true 直接整页隐藏，用户连入口都没有，只能往共享目录里放东西。
+# 0.6.6 及以前是 true（当时没打算让 dsh 碰用户文件），0.6.7 起必须是 false。
+AUTHPATH="$(mval disable_authorization_path || true)"
+if [ "${AUTHPATH:-false}" = "false" ]; then
+  ok "disable_authorization_path=false（应用设置里有「访问权限」）"
+else
+  bad "disable_authorization_path=${AUTHPATH:-<缺失>}" \
+      "应用设置里看不到「访问权限」页，用户无法把任意文件夹授权给 dsh，也就加不成工作区"
+fi
+
+# 平台通过 TRIM_DATA_ACCESSIBLE_PATHS 传授权路径；启动时会逐条写进日志。
+# 没有这一行 = 这段逻辑没跑到（或服务没重启过）；有「无」= 用户确实还没授权。
+if [ -f "$ROOT/var/info.log" ] && grep -q 'auth-paths: ' "$ROOT/var/info.log" 2>/dev/null; then
+  ok "启动日志记录了授权路径" "$(grep 'auth-paths: ' "$ROOT/var/info.log" | tail -n1)"
+else
+  warn "启动日志里没有 auth-paths" \
+       "要么这次启动发生在 0.6.7 之前，要么 log_accessible_paths 没被调用；重启一次再看"
+fi
+
 # ctl_stop 丢了 → 应用中心只给「打开 / 卸载」，没有停止、也没有重启入口。
 # 这条以前没断言，2026-10-27 真机上就是这么暴露的：功能全对，但点不到停止。
 CSTOP="$(mval ctl_stop || true)"

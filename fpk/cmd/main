@@ -382,6 +382,41 @@ ensure_default_workspace() {
   return 0
 }
 
+# ---------------------------------------------------------------- 授权目录
+#
+# 用户可以在「应用设置 → 访问权限」里把任意文件夹授权给本应用：平台把 ACL 授予
+# 应用用户，并把路径用 TRIM_DATA_ACCESSIBLE_PATHS（冒号分隔）传给生命周期脚本。
+# dsh 的目录选择器在非回环绑定下必定走 browse 后端
+# （dsh-host-directory-picker-browse：按进程权限列举全盘、从家目录起步、带 / 面包屑），
+# 所以只要 ACL 到位，用户在「+ 添加工作区」里就能一路点到那个文件夹。
+#
+# 这里只做记录与可读性探测，不改任何权限。日志有 auth-paths: 前缀，
+# 排错时能区分三种情况：没授权（无这条）／平台没传进来（有「无」但用户说授了）／
+# ACL 没生效（有路径但「进不去」）。
+log_accessible_paths() {
+  local raw="${TRIM_DATA_ACCESSIBLE_PATHS:-}" p n=0
+  if [ -z "$raw" ]; then
+    log "auth-paths: 无（用户未在「访问权限」里授权任何文件夹，dsh 只能访问共享目录）"
+    return 0
+  fi
+  local IFS=':'
+  for p in $raw; do
+    [ -n "$p" ] || continue
+    n=$((n + 1))
+    if [ ! -d "$p" ]; then
+      log "auth-paths: $p （不存在）"
+    elif [ ! -r "$p" ] || [ ! -x "$p" ]; then
+      log "auth-paths: $p （目录存在但 $(id -un) 进不去，检查授权是否生效）"
+    elif [ -w "$p" ]; then
+      log "auth-paths: $p （读写）"
+    else
+      log "auth-paths: $p （只读，当工作区用时写文件会失败）"
+    fi
+  done
+  log "auth-paths: 共 ${n} 条"
+  return 0
+}
+
 rotate_log() {
   [ -f "$LOGFILE" ] || return 0
   local sz
@@ -630,6 +665,8 @@ do_start() {
   # 这里已经过了 is_running 的早退，确定没有 dsh 进程在跑，改注册表才安全。
   ensure_documents_dir
   ensure_default_workspace
+  # 用户在「访问权限」里授权过的文件夹（F23）：只记录 + 探测可读性。
+  log_accessible_paths
 
   # 记下当前日志长度：抓 token 时只看本次启动新增的部分。
   # 否则 grep 整个日志会命中上一次的 URL —— 那个 token 早已随旧进程失效。

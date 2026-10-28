@@ -7,6 +7,10 @@
         "helpText": "安装后以专用用户 dsh 运行，只监听局域网地址。装完在应用中心点图标即可进入，不需要再取令牌。"
       },
       {
+        "type": "tips",
+        "helpText": "要把「我的文件」里的文件夹当工作区用，装完到 应用设置 → 访问权限 → 添加 里授权该文件夹（选「读写」），再在 dsh 的「+ 添加工作区」里选中它。"
+      },
+      {
         "type": "password",
         "field": "dsh_apikey",
         "label": "DeepSeek API Key",

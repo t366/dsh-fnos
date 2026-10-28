@@ -726,6 +726,13 @@ upgrade_init（解包前）→ 解包新 app/ 覆盖 target → upgrade_callback
 5. 明确告知：局域网内任何拿到 URL 的人 = 完整控制权；被授予该目录的其它飞牛用户也能读到 `var/`。
 6. 可选加固：`--tls-cert/--tls-key` 自签证书（cookie 变 `Secure`，浏览器有告警）；或 E2 之后加一层 basic auth（**前提：TLS 或可信内网**）。
 7. 保留 dsh 的人工确认策略（`workspace-write` 起步），不要一上来给 `danger-full-access`。
+8. **用户授权目录 = 由用户按需扩大爆炸半径**（`manifest.disable_authorization_path=false`）。
+   应用默认只能碰 `data-share` 那块；用户在「应用设置 → 访问权限」里加的每个文件夹，
+   平台会把 ACL 授给 `dsh`，之后 dsh 的目录选择器（远程访问下走 browse 后端，能列全盘）
+   就能把该目录当工作区，agent 在里面读写与执行。这比「一开始就 root / 全盘可读」好得多：
+   权限粒度是**用户逐个目录点出来的**，且可随时收回（删掉授权项）。
+   代价是必须说清：**授权读写 = 把该目录交给 agent 全权处置**，向导与文档都要写明。
+   （0.6.6 及以前这里写的是 `true`，等于把这条路堵死，见 ISSUES F23。）
 
 ---
 

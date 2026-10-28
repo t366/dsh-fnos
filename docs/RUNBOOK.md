@@ -261,6 +261,34 @@ grep -c '"path"' "$H/storages/workspace.json"
 > 补登记需要一次**真正的重启**（`start` 走到 `spawn` 之前才会执行）。覆盖升级后平台会自己
 > 重启进程；如果是手动验证，用 `appcenter-cli stop dsh && appcenter-cli start dsh`。
 
+### 5.3　F23 能不能把任意文件夹当工作区（0.6.7 起）
+
+这一条要看两处：**开关**（设置页有没有那一页）和**实际能不能进去**。
+
+```bash
+# 1) 开关：安装后的 manifest 里应为 false
+grep -i disable_authorization_path /var/apps/dsh/manifest \
+  || grep -i disable_authorization_path /vol1/@appmeta/dsh/manifest
+
+# 2) 平台到底传了哪些授权路径（启动时逐条记下，auth-paths: 前缀）
+grep 'auth-paths: ' /var/apps/dsh/var/info.log | tail -n 10
+```
+
+界面部分（必须人手点一次，脚本替不了）：
+
+1. 应用中心 → dsh → 设置 → **访问权限** → `+ 添加` → 选一个「我的文件」里的文件夹 →
+   权限选 **读写**；
+2. 回 dsh → 工作区下拉 → **+ 添加工作区** → 从 `/` 或家目录一路点进去 → 选中；
+3. 新工作区里随便让 dsh 建个文件（一句话就够），确认写进去了。
+
+判据：
+
+- 设置里有「访问权限」页（`disable_authorization_path=false`）；没有就是包没换成功；
+- 添加后 `info.log` 的 `auth-paths:` 里出现该路径且标「读写」——但**要等下一次重启**才更新，
+  所以先看界面能不能用，别为了这行日志去重启（会换代 token）；
+- dsh 里能选中并成功写入。若「进不去」，是 ACL 没落到 `dsh` 用户；若「选得中但写失败」，
+  多半授权时选成了只读。
+
 ---
 
 ## 第 6 步　回归 T2：令牌是否一次性、cookie 能否活过重启

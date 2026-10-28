@@ -161,6 +161,16 @@ node -v && npm -v
 - `username`/`groupname` 省略时按 `appname` 自动生成。
 - 可选 `join-groups`，用于 `video` / `render` 这类系统组。
 - 应用默认**拿不到**用户文件，需要用户在设置里授权目录，或声明 `data-share`。
+- **「应用设置 → 访问权限 → 允许访问以下文件夹」这一页由 `manifest.disable_authorization_path` 控制**：
+  `false`（默认）= 用户可添加授权目录；`true` = **整页隐藏**，用户连入口都没有。
+  官方原文只有一句「仅当应用不需要用户选择文件或目录访问权限时才使用 `true`」，
+  所以**通用型应用一律不要写 `true`**（本项目踩过：ISSUES F23）。
+- 用户授权的路径通过环境变量 `TRIM_DATA_ACCESSIBLE_PATHS`（`:` 分隔）传给生命周期脚本；
+  平台同时把 ACL 授予应用运行用户（Windows ACL 模型）。**声明/授权都只是前提**：
+  官方明确要求应用读写前仍要自己校验文件权限。
+- 注意区分两条来源：`TRIM_DATA_SHARE_PATHS` = `config/resource` 里自己声明的那块目录
+  （安装时自动建、自动授权）；`TRIM_DATA_ACCESSIBLE_PATHS` = **用户自己挑的**目录。
+  前者只覆盖应用自己那块，后者才是「用户把任意文件夹交给你」的正规通道。
 
 ### 3.6 资源（`resource` 页）
 
