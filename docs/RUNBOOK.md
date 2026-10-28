@@ -364,33 +364,25 @@ runuser -u dsh -- head -c 40 "$P/README.md" 2>&1 | head -3
   （真机上就是 `984:979 600` 的网页文件和 `0:0 700` 的 `.dsh`/`deepseek-harness`/`dsh-run`
   这批）；两个都不行才是目录层的事。
 
-最小开口（不动属主、不动 base mode，可回滚）：`setfacl` 的命名条目**不受** base mode
-的 `---` 影响，只受 mask 约束，所以对 0000 目录同样有效：
+**别用 `setfacl`**（2026-10-29 01:03 实测否定）：`setfacl -R -m u:dsh:rwX` **确实写进去了**，
+`getfacl -p README.md` 能看到 `user:dsh:rw-` + `mask::rw-` —— POSIX 语义下必须放行 ——
+可 `runuser -u dsh -- head` 照样 EACCES。这台机器上这个目录的判定**不吃 POSIX ACL**，
+（`css/` 那次"通了"也不能当证据，可能本来就能进）。所以别再在它上面刷 ACL 了。
+
+走 mode 语义，一次到位（先留底）：
 
 ```bash
 P=/vol1/1000/Project
-# 先把上级链路确认能穿过（dsh 需要到 /vol1/1000 的 x 位）
-for d in /vol1 /vol1/1000; do runuser -u dsh -- test -x "$d" && echo "OK $d" || echo "BLOCK $d"; done
-getfacl -R -p "$P" > ~/acl-backup-project-$(date +%F-%H%M).txt   # 留底
-setfacl -R    -m u:dsh:rwX "$P"
-setfacl -R -d -m u:dsh:rwX "$P"        # 默认 ACL：以后在这里新建的文件自动带
-ls -ld "$P"                            # 末尾应出现 +
-runuser -u dsh -- ls -la "$P" && runuser -u dsh -- head -c 40 "$P/README.md"
-```
-
-回滚：`setfacl -R -b "$P"`（清扩展 ACL）。
-
-最小开口只解决「dsh 能不能用」。**你自己能读写就不用动属主** —— 真机上属主 `T366` 访问是正常的。
-只有两种情况才需要把属主收回来（同样先留底）：你也打不开，或者想把混在里面的外来 UID
-（`984:979` 的网页文件、`0:0` 的 `.dsh`/`dsh-run`/`*.fpk`）一并理顺：
-
-```bash
+getfacl -R -p "$P" > ~/acl-backup-project-$(date +%F-%H%M).txt
 chown -R 1000:1001 "$P"                # 1000=T366, 1001=Users（用 id 1000 确认）
 chmod -R u+rwX,go+rX "$P"              # 目录 755 / 文件 644
+runuser -u dsh -- head -c 40 "$P/README.md"
 ```
 
-> 有 `setfacl` 就够了其实：它是**加**权限，不动属主也不动 base mode，出问题 `setfacl -b` 就回滚。
-> `chown -R` 是**改**权限，会覆盖既有 ACL，只在确认属主确实乱了时才用。
+`go+rX` 是关键：`dsh` **不在 `Users` 组**（`groups=901(AppUsers),966(dsh)`），靠 `other` 的
+读位最省事，不用再纠结 ACL 和组。`chown` 会把 `984:979`（= `dsh-qddev`，另一套包的旧应用
+用户）和 `0:0` 的残骸一并归一，所以**只对确定属于你的目录用**；共享文件夹请走文件管理界面
+的「应用到子文件夹和文件」。
 
 顺手一个线索：目录里出现 `.local`、`.dsh`、`deepseek-harness`、`dsh-run` 且属主是 `0:0`
 mode `700` —— 这四样正是 dsh 首次启动会在 `$HOME` 下建的东西（`.local` 的 XDG 目录、`.dsh`

@@ -852,43 +852,49 @@ README / RUNBOOK 里也写了这条，但正确形态是「可访问目录」里
 启动脚本去 `chown -R` 用户文件是越界行为（而且会盖掉 FNOS 的 ACL，见 F23 的说明）。
 修复在数据侧：文件管理里把权限「应用到子文件夹和文件」，或由管理员用 root 修正属主。
 
-**顺带一个判断依据**：这批文件的属主是 `nobody`，说明它们**不是 dsh 写的**
-（dsh 以 `dsh` 身份写，属主会是 `dsh`），而是从别处拷进来时带进来的 UID，
-或某个容器以未映射 UID 写入。别为此去改 dsh 的启动参数 —— 那改不对。
+**顺带一个判断依据（已修正）**：这批文件不是 `dsh` 写的。但「属主是 `nobody`／未映射 UID」
+这个说法是**我读错了 `find` 的格式** —— `-printf '%U:%G'` 里的 `%U`/`%G` **本来就是数字 UID**
+（`%u`/`%g` 才是用户名），所以「984 查不到用户」是假象。`getfacl` 一查就现形：**984 = `dsh-qddev`**，
+一个独立的应用用户（不是本包创建，仓库里搜不到这个名字）。
 
-**真机取证（2026-10-29 00:41 / 00:52，root 只读诊断）** —— mode 位在这台机器上**不是唯一裁判**：
+**真机取证（2026-10-29 00:41 / 00:52 / 01:03，root 只读诊断）**：
 
 ```console
 uid=1000(T366) gid=1001(Users) groups=1001(Users),1000(Administrators)
 uid=971(dsh)   gid=901(AppUsers) groups=901(AppUsers),966(dsh)
-d--------- 1 T366 Users 262 /vol1/1000/Project      # stat 说 0000
-user::---  group::---  other::---                   # getfacl 只有基础三条，无扩展条目
-1000:1001 0 Project   984:979 0 css   984:979 600 README.md index.html
-0:0 700  .local .dsh deepseek-harness dsh-run dsh-tls      0:0 0  dsh-0.6.x.fpk
+d--------- 1 T366 Users 262 Project          # stat 说 0000
+user::---  group::---  other::---            # 目录 getfacl 只有基础三条
+984:979(=dsh-qddev) 600 README.md index.html      0:0 700 .dsh deepseek-harness dsh-run dsh-tls
 
-runuser -u T366 -- ls  "$P"          → 列出全部条目（成功）
-runuser -u T366 -- head README.md    → 打印正文（成功；该文件是 984:979 600）
-runuser -u dsh  -- ls  "$P"          → 列出 5 个条目（成功）
-runuser -u dsh  -- head README.md    → Permission denied
+runuser -u T366 -- head README.md   → 成功
+runuser -u dsh  -- ls   "$P"        → 成功（readdir）
+runuser -u dsh  -- ls   "$P/css"    → 成功
+runuser -u dsh  -- head README.md   → Permission denied
 ```
 
-结论（**第一版推断写错了，以此为准**）：
+`setfacl -R -m u:dsh:rwX "$P"` 之后 ACL **确实写进去了**：
 
-1. **不能用 `ls -ld` / `getfacl` 推断谁能访问**。`0000` + 无扩展 ACL，却能让属主读别人 `600`
-   的文件、让 `dsh` 跑通 `readdir` —— 说明这台机器上还有一层 mode / POSIX ACL 之外的授权在
-   放行（fnOS 自己的机制，形态待查：`findmnt -T "$P" -o FSTYPE,OPTIONS` +
-   `getfattr -d -m - "$P"`）。上一版「0000 连属主自己都进不去、拒绝发生在目录层」的结论
-   **不成立，已作废**。
-2. **唯一可靠判据是实测**：`runuser -u <真正跑应用的用户> -- <操作>`，别读 mode 猜。
-3. **dsh 的真实缺口是文件层，不是目录层**。它能 `readdir`（目录的 `r` 有），但三条
-   `984:979 600` 的网页文件、以及 `.local` `.dsh` `deepseek-harness` `dsh-run` `dsh-tls`
-   `*.fpk` 这批 `0:0` 的东西，没给 `dsh` 任何权限位 —— 这才是 agent 逐个文件报「无法读取」
-   的直接原因。
-4. `984:979` 在系统里查不到对应用户，佐证上面的「容器未映射 UID / 拷贝带入」。
+```console
+# file: README.md
+# owner: dsh-qddev
+user::rw-  user:dsh:rw-  group::---  mask::rw-  other::---
+```
 
-处理：属主 T366 自己读写是正常的，**不需要整目录 `chown`**；只补 `dsh` 的权限即可 ——
-`setfacl -R -m u:dsh:rwX`（外加默认 ACL），或在文件管理里对该目录「应用到子文件夹和文件」。
-命令在 `RUNBOOK.md` 5.5。
+`user:dsh:rw-` + `mask::rw-` 在 POSIX 语义下**必须放行**，可 `runuser -u dsh -- head` 仍然
+EACCES。结论：
+
+1. **这台机器上 Project 的访问判定不吃 POSIX ACL**（也不完全吃 mode：`0000` 的目录能让
+   非属主 `readdir`）。别再在这棵树上用 `setfacl` 试 —— 写进去了也不生效。
+2. 两次推断都已作废：v1「0000 连属主都进不去」、v2「984 是未映射 UID」。两次都是拿
+   `stat`/`find` 的输出反推可访问性，而没实测。**以后只认 `runuser -u <真实用户>`**。
+3. 真正可行的是把**属主和 mode 归一到 mode 语义**（`chown` + `chmod 644/755`，让 `dsh` 从
+   `other` 位读），或用文件管理界面的「应用到子文件夹和文件」。
+4. 一棵树里混着三个属主（`1000:1001` T366 / `984:979` dsh-qddev / `0:0` root），说明它被三个
+   身份写过。`dsh-qddev` 疑为**另一套 dsh 包的应用用户**（`dsh-0.6.3/0.6.5/0.6.7.fpk`
+   也在树里），值得跟用户确认。
+
+处理：Project 的权限史太脏，**不拿它做验收** —— 新建一个干净目录跑 F22/F23/F24；Project 单独
+用 `chown -R 1000:1001` + `chmod -R u+rwX,go+rX` 收拾。命令在 `RUNBOOK.md` 5.5。
 
 
 ---
