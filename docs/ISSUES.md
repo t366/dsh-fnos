@@ -890,8 +890,24 @@ EACCES。结论：
 3. 真正可行的是把**属主和 mode 归一到 mode 语义**（`chown` + `chmod 644/755`，让 `dsh` 从
    `other` 位读），或用文件管理界面的「应用到子文件夹和文件」。
 4. 一棵树里混着三个属主（`1000:1001` T366 / `984:979` dsh-qddev / `0:0` root），说明它被三个
-   身份写过。`dsh-qddev` 疑为**另一套 dsh 包的应用用户**（`dsh-0.6.3/0.6.5/0.6.7.fpk`
-   也在树里），值得跟用户确认。
+   身份写过。**`dsh-qddev` 已确认是另一套 dsh 包的应用用户**：
+
+   ```console
+   dsh-qddev:x:984:901::/home/dsh-qddev:/usr/sbin/nologin
+   drwx------ 1 dsh-qddev dsh-qddev 0 Sep 10 00:35 /vol1/@appshare/dsh-qddev
+   ```
+
+   gid 901 就是 `AppUsers`，跟现在 `dsh` 的附加组之一相同，但 **uid/gid 都不同**（984:979 vs
+   971:966）。也就是说这台机器上装过**两套 appname 不同的包**，Project 里那批网页文件是旧包
+   （`dsh-qddev` 用户）写的。
+
+5. **由此得出一条硬约束：应用用户名不能变。** `cmd/main` 是
+   `DSH_USER="${TRIM_USERNAME:-dsh}"` —— 用户名由平台按 `fpk/manifest` 的 `appname`
+   （本包是 `appname="dsh"`）生成，不是我们写死的。旧包 appname 里带 `qddev`，平台就造出了
+   `dsh-qddev`。一旦改 appname，平台换一个用户，`$HOME`（`.dsh-home`）、`workspace.json`、
+   以及用户授权目录里由旧用户写下的文件**全部归属断裂**，新用户读不到，症状正是本次这一串
+   （agent 报「无法读取」、默认工作区建不出来）。升级只能换版本号、**不能换 appname**；
+   真要换就得配套写数据迁移（`chown -R` 旧 uid → 新 uid）。
 
 处理：Project 的权限史太脏，**不拿它做验收** —— 新建一个干净目录跑 F22/F23/F24；Project 单独
 用 `chown -R 1000:1001` + `chmod -R u+rwX,go+rX` 收拾。命令在 `RUNBOOK.md` 5.5。
