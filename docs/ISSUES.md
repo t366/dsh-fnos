@@ -856,6 +856,31 @@ README / RUNBOOK 里也写了这条，但正确形态是「可访问目录」里
 （dsh 以 `dsh` 身份写，属主会是 `dsh`），而是从别处拷进来时带进来的 UID，
 或某个容器以未映射 UID 写入。别为此去改 dsh 的启动参数 —— 那改不对。
 
+**真机取证（2026-10-29 00:41，root 只读诊断）** —— 比上面更准确，两处要更正：
+
+```console
+uid=1000(T366) gid=1001(Users)   # 属主是存储空间用户
+uid=971(dsh)   gid=901(AppUsers) groups=901(AppUsers),966(dsh)
+d--------- 1 T366 Users 262 /vol1/1000/Project          # ← mode 0000，属主自己都进不去
+# file: /vol1/1000/Project
+user::--- / group::--- / other::---                      # ← 没有任何扩展 ACL 条目
+1000:1001 0  Project            984:979 0  Project/css
+984:979  600 README.md          0:0   700  Project/.dsh  Project/deepseek-harness
+runuser -u dsh -- head -c 40 Project/README.md → Permission denied
+```
+
+1. **拒绝发生在目录层，不是文件层**。`/vol1/1000/Project` 本身是 `0000`，`dsh` 连 `x`
+   都没有，`Permission denied` 在 `open()` 时就已经发生，跟里面文件是什么权限无关。
+   所以「把文件权限修好」这条建议在真机上不完整 —— 得先让目录可穿。
+2. **平台的「访问权限」没有落成 ACL**。如果授权生效，`getfacl` 应出现 `user:dsh:` 这种
+   扩展条目；真机上一条都没有，而 `TRIM_DATA_ACCESSIBLE_PATHS` 确实传进来了
+   （`auth-paths: 共 1 条`）。这更像**平台侧没把授权写进文件系统**，是本项目要盯的
+   外部缺陷（记在 T 系列里跟踪），应用侧只能如实报告。
+3. `984:979` 是系统里查不到对应用户的 UID，佐证上面的「容器未映射 UID / 拷贝带入」。
+
+处理顺序：先手工 ACL 开口验证链路（`setfacl -R -m u:dsh:rwX`，命名条目不受 base mode
+`---` 约束），再决定要不要把属主收回 `1000:1001`。完整命令与判据在 `RUNBOOK.md` 5.5。
+
 
 ---
 

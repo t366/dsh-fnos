@@ -340,7 +340,7 @@ runuser -u dsh -- ls "$P" 2>&1 | head -5
 runuser -u dsh -- head -c 40 "$P/README.md" 2>&1 | head -3
 ```
 
-判据与处理：
+判据与处理（2026-10-29 真机第二次取证的补充）：
 
 - 日志写「读写」+ `runuser` 也读得动 → 正常，问题不在权限；
 - 日志写「读不了…如 xxx（nobody:nogroup 0000）」→ **文件本身没权限**。两个选择：
@@ -349,7 +349,48 @@ runuser -u dsh -- head -c 40 "$P/README.md" 2>&1 | head -3
      `id 1000`（FNOS 的存储空间里 `/vol1/1000` 通常就是该用户），
      再 `chown -R 1000:1000 /vol1/1000/Project`。
      这一步会覆盖现有 ACL，跑之前先 `getfacl` 留一份。
-- 日志写「dsh 进不去」→ 授权没落到应用用户，回「访问权限」重新添加一次（选**读写**）。
+- 日志写「dsh 进不去」→ 分两层看，别只盯着文件：
+  1. **目录本身 mode 就是 0**。真机上 `/vol1/1000/Project` 是 `d---------`（属主 `T366`、
+     `getfacl` 里 `user::---`/`group::---`/`other::---`，**没有**任何扩展条目）——
+     这种目录连属主自己都进不去，`runuser -u dsh -- head 里面的文件` 报的
+     Permission denied 是**目录层**拒绝，还没走到文件层。修法见下面「最小开口」。
+  2. **平台的「访问权限」没写成 ACL**。授权成功时 `getfacl -p <目录>` 应能看到
+     `user:dsh:` 或 `group:...:` 这类扩展条目；真机上一条都没有，说明授权记录只在
+     appcenter 那边，没落到文件系统（`TRIM_DATA_ACCESSIBLE_PATHS` 确实传进来了，
+     `auth-paths: 共 1 条` 就是它）。这是产品侧要查的缺陷，先用手工 ACL 绕过。
+
+最小开口（不动属主、不动 base mode，可回滚）：`setfacl` 的命名条目**不受** base mode
+的 `---` 影响，只受 mask 约束，所以对 0000 目录同样有效：
+
+```bash
+P=/vol1/1000/Project
+# 先把上级链路确认能穿过（dsh 需要到 /vol1/1000 的 x 位）
+for d in /vol1 /vol1/1000; do runuser -u dsh -- test -x "$d" && echo "OK $d" || echo "BLOCK $d"; done
+getfacl -R -p "$P" > ~/acl-backup-project-$(date +%F-%H%M).txt   # 留底
+setfacl -R    -m u:dsh:rwX "$P"
+setfacl -R -d -m u:dsh:rwX "$P"        # 默认 ACL：以后在这里新建的文件自动带
+ls -ld "$P"                            # 末尾应出现 +
+runuser -u dsh -- ls -la "$P" && runuser -u dsh -- head -c 40 "$P/README.md"
+```
+
+回滚：`setfacl -R -b "$P"`（清扩展 ACL）。
+
+注意最小开口只解决「dsh 能不能用」，**不解决「你自己能不能用」**：base mode 仍是 0000、
+文件仍属 `984:979`。目录里若混着不属于你的 UID（容器 `userns-remap`、`docker cp` 的产物），
+要你自己能打开就得把属主收回来（同样先留底）：
+
+```bash
+chown -R 1000:1001 "$P"                # 1000=T366, 1001=Users（用 id 1000 确认）
+chmod -R u+rwX,go+rX "$P"              # 目录 755 / 文件 644
+```
+
+顺手一个线索：目录里出现 `.local`、`.dsh`、`deepseek-harness`、`dsh-run` 且属主是 `0:0`
+mode `700` —— 这四样正是 dsh 首次启动会在 `$HOME` 下建的东西（`.local` 的 XDG 目录、`.dsh`
+配置、`deepseek-harness` 默认工作区父目录、`dsh-run` 运行目录），说明曾经有 root 身份、
+把 `HOME` 指到那个目录跑过一次 dsh。默认工作区因此被建在了那个目录底下，换成 `dsh` 用户
+运行时进不去 0000 的父目录 → 前端报 `defaultWorkspace.failed`（「缺少默认工作区」）。
+确认里面没有你要留的东西后，把这一批**移走**（`mv` 到备份目录，别直接 `rm`），再重启应用，
+让它按应用用户的 HOME 重新建干净的，比在 root 的残骸上打补丁好。
 
 > 别用应用启动脚本去自动 `chown` 用户文件：那既越界，又会把 FNOS 的 ACL 冲掉。
 > 应用只负责**说清楚**是权限问题，修数据是用户/管理员的事。
