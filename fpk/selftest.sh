@@ -278,6 +278,25 @@ check "不存在的授权路径单独标出" "yes" \
 check "授权路径条数已统计" "yes" \
   "$(grep -q 'auth-paths: 共 3 条' "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
 
+# 探测必须切到应用用户身份：root 有 CAP_DAC_OVERRIDE，连 0000 的文件它也读得了。
+# 真机上就是这么翻的 —— 日志写「读写」，dsh 进去一个文件都读不了（ISSUES F25）。
+# 这里直接单元验 probe_as_app，不依赖 start 的编排。
+if [ "$LINUX" = "yes" ] && [ "$(id -u)" = "0" ] && id -u nobody >/dev/null 2>&1; then
+  mkdir -p "$ROOT/locked-probe"
+  : >"$ROOT/locked-probe/secret.txt"
+  chmod 700 "$ROOT/locked-probe"
+  chmod 600 "$ROOT/locked-probe/secret.txt"
+  _PROBE_WARNED=0
+  log() { :; }
+  eval "$(sed -n '/^probe_as_app()/,/^}/p' "$HERE/cmd/main")"
+  if DSH_USER=nobody probe_as_app -r "$ROOT/locked-probe/secret.txt"; then _probe=readable; else _probe=blocked; fi
+  check "权限探测按应用用户算（root 读得了不算数）" "blocked" "$_probe"
+  unset -f log
+else
+  SKIP=$((SKIP + 1))
+  printf '  \033[33mSKIP\033[0m  %s（需要 Linux + root + nobody 用户）\n' "权限探测按应用用户算"
+fi
+
 step "授权目录的浏览入口（F24：选择工作区目录里点得到）"
 # dsh 的选择器只从 $HOME 起步，且把 home 以下压缩成「主目录」一个面包屑，
 # 用户点不出去。所以启动时要把授权目录软链进 $HOME/可访问目录/。

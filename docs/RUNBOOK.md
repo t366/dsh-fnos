@@ -320,6 +320,40 @@ grep 'access-links: ' /var/apps/dsh/var/info.log | tail -n 10
 **0.6.7 上的临时绕法**：对话框右上角有个**铅笔图标**，点开可以手打绝对路径
 （如 `/vol1/1000/T366的文件/Project`），回车后点「打开」。
 
+### 5.5　授权目录 dsh 到底读不读得了（0.6.8 起）
+
+「平台说授权成功」和「dsh 真的能读」也是两件事 —— 2026-10-29 真机上就撞到：目录授权了、
+工作区也建出来了，可 agent 逐个文件报「无法读取（owner:nobody, mode 0000）」。
+原因是那批文件本身没给 `dsh` 任何权限位，而我们旧版日志是用 **root** 探的（root 绕过 mode 位），
+所以写着「读写」，把人带偏了。
+
+```bash
+# 现在日志是按 dsh 身份探的：应看到「读写」，或者明确指出读不了
+grep 'auth-paths: ' /var/apps/dsh/var/info.log | tail -n 10
+# 权限实况：属主、mode、有没有给 dsh 的 ACL
+P=/vol1/1000/Project
+ls -ld "$P"; find "$P" -maxdepth 1 -printf '%U:%G %m %p\n' 2>/dev/null | head -10
+getfacl -p "$P" 2>/dev/null | head -15
+id dsh
+# 直接以 dsh 身份试一次（这两条不写任何东西）
+runuser -u dsh -- ls "$P" 2>&1 | head -5
+runuser -u dsh -- head -c 40 "$P/README.md" 2>&1 | head -3
+```
+
+判据与处理：
+
+- 日志写「读写」+ `runuser` 也读得动 → 正常，问题不在权限；
+- 日志写「读不了…如 xxx（nobody:nogroup 0000）」→ **文件本身没权限**。两个选择：
+  1. 文件管理里对那个文件夹重新设权限，勾上「应用到子文件夹和文件」；
+  2. 由管理员（root）修正属主，**先看清属主该是谁**：
+     `id 1000`（FNOS 的存储空间里 `/vol1/1000` 通常就是该用户），
+     再 `chown -R 1000:1000 /vol1/1000/Project`。
+     这一步会覆盖现有 ACL，跑之前先 `getfacl` 留一份。
+- 日志写「dsh 进不去」→ 授权没落到应用用户，回「访问权限」重新添加一次（选**读写**）。
+
+> 别用应用启动脚本去自动 `chown` 用户文件：那既越界，又会把 FNOS 的 ACL 冲掉。
+> 应用只负责**说清楚**是权限问题，修数据是用户/管理员的事。
+
 ---
 
 ## 第 6 步　回归 T2：令牌是否一次性、cookie 能否活过重启

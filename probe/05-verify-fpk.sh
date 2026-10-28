@@ -286,6 +286,15 @@ fi
 # 没有这一行 = 这段逻辑没跑到（或服务没重启过）；有「无」= 用户确实还没授权。
 if [ -f "$ROOT/var/info.log" ] && grep -q 'auth-paths: ' "$ROOT/var/info.log" 2>/dev/null; then
   ok "启动日志记录了授权路径" "$(grep 'auth-paths: ' "$ROOT/var/info.log" | tail -n1)"
+  # 「有路径」不等于「dsh 用得了」：目录能进、里面的文件却是 nobody:0000 时，
+  # 加进工作区只会得到一屏「无法读取」。0.6.8 起探测切到应用用户身份，会明确标出来。
+  BADLINE="$(tail -n 40 "$ROOT/var/info.log" | grep 'auth-paths: ' | grep -E '进不去|读不了' | tail -n1)"
+  if [ -n "$BADLINE" ]; then
+    warn "授权目录 dsh 用不了：$BADLINE" \
+         "在文件管理里把权限「应用到子文件夹和文件」，或由管理员修正属主；否则 agent 会一直报「无法读取」"
+  else
+    ok "授权目录对 dsh 可用（没有进不去/读不了）"
+  fi
 else
   warn "启动日志里没有 auth-paths" \
        "要么这次启动发生在 0.6.7 之前，要么 log_accessible_paths 没被调用；重启一次再看"

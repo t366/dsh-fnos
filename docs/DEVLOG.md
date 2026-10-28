@@ -604,6 +604,41 @@ dsh 是通用工作台，工作区天然是用户的任意目录。这个字段�
 **别让「该不该做」和「做成了没有」共用一行日志**，否则两边的失败会互相掩盖。
 
 
+## 阶段 24（2026-10-29 00:30）　日志说「读写」，dsh 一个文件都读不了（F25）
+
+用户把 `/vol1/1000/Project` 加成工作区后，agent 在里面逐个文件报
+「无法读取（owner:nobody, mode 0000）」，`.readme.md`、`index.html`、`css/`、`js/` 全军覆没；
+而 `auth-paths:` 那行日志写的是「读写」。两条信息对立，等于把排错方向带反了。
+
+**根因在我们自己的探测**：`log_accessible_paths()` 用的是 `[ -r ]` / `[ -w ]`，
+而生命周期脚本以 **root** 运行。root 有 `CAP_DAC_OVERRIDE`，绕开 mode 位 ——
+`0000` 的文件在 root 眼里照样「可读可写」。真正跑 dsh 的是 `dsh` 用户，同一批文件是 `EACCES`。
+
+这是这几天第三次同型错误（前两次：F24 的日志断言靠 WARN 分支蒙对、F22 的
+`xdg-user-dir` 回显 HOME 被误当合法值）。**共同点都是「用错的视角去看，得到了一个看起来正常的结论」。**
+
+**改动**：
+
+| 位置 | 改动 |
+|---|---|
+| `cmd/main` | 新增 `probe_as_app()`：root 时用 `runuser -u` / `su -s` 切到应用用户再 `test`；两者都没有才退回自身身份并留 WARN |
+| `cmd/main` | 新增 `sample_unreadable()`：目录可进时抽查前 6 项，统计 dsh 读不了的比例 + 首个样本（属主:组 权限） |
+| `cmd/main` | `log_accessible_paths()` 多一条分支：「目录可进，但抽查 N 项里有 M 项 dsh 读不了，如 README.md（nobody:nogroup 0000）」 |
+| `fpk/selftest.sh` | 新增断言：以 `nobody` 读 0700-root 的文件必须判为不可读（Linux + root 才跑，Windows 跳过） |
+| `probe/05` | 日志出现「进不去 / 读不了」直接 WARN，并指向修复动作 |
+| 文档 | ISSUES **F25**、RUNBOOK **5.5**、`manifest` changelog |
+
+**没做的事**：不在启动时 `chown -R` 那批文件。理由有三：那是用户数据不是我们的；
+`chown/chmod` 会覆盖 FNOS 的 ACL（F23 已经踩过一次「ACL 与 mode 位不是一回事」）；
+应用该做的是把问题**说清楚**，而不是替用户改数据。
+
+**还没定论的**：那批文件为什么是 `nobody:nogroup 0000`。属主不是 `dsh`，说明**不是 dsh 写的**
+（dsh 以 dsh 身份写，属主会是 dsh），大概率是从别处拷进来时带的 UID，或某个容器以未映射
+UID 写入。这条要等用户跑 `getfacl` + `find -printf '%U:%G %m'` 才能定性，别猜。
+
+**验证**：`bash fpk/selftest.sh` → **51 通过 / 25 跳过 / 0 失败**（Windows 上多出一条跳过）。
+
+
 ## 下一步
 
 **待办不再在这里维护**——统一见 [ISSUES.md](ISSUES.md) 的「当前剩余问题（P0–P3）」。
@@ -612,6 +647,7 @@ DEVLOG 只记已经发生的事，避免两处列表各说一套。
 当前动作只有一件：
 
 > **在 NAS 上打 0.6.8 并覆盖安装** —— `cd ~/dsh-fnos && git pull && cd fpk && bash build.sh full`，
-> 然后应用中心「手动安装」选新包（覆盖升级不用卸载）。装完看三件事：
+> 然后应用中心「手动安装」选新包（覆盖升级不用卸载）。装完看四件事：
 > 「选择工作区目录」首屏是否有 **「可访问目录」**、里面能否点到刚授权的文件夹、
-> 建出来的工作区路径是不是真实路径（RUNBOOK 5.4）；顺带确认默认工作区仍在（RUNBOOK 5.2）。
+> 建出来的工作区路径是不是真实路径（RUNBOOK 5.4）、`auth-paths:` 是否如实标出
+> 「读不了」而不是继续写「读写」（RUNBOOK 5.5）。顺带确认默认工作区仍在（RUNBOOK 5.2）。

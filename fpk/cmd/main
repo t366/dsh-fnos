@@ -391,10 +391,58 @@ ensure_default_workspace() {
 # 所以只要 ACL 到位，用户在「+ 添加工作区」里就能一路点到那个文件夹。
 #
 # 这里只做记录与可读性探测，不改任何权限。日志有 auth-paths: 前缀，
-# 排错时能区分三种情况：没授权（无这条）／平台没传进来（有「无」但用户说授了）／
-# ACL 没生效（有路径但「进不去」）。
+# 排错时能区分四种情况：没授权（无这条）／平台没传进来（有「无」但用户说授了）／
+# ACL 没落到 dsh（「进不去」）／目录能进但里面的文件读不了（「读不了」）。
+#
+# 探测必须以**应用用户的身份**做：root 有 CAP_DAC_OVERRIDE，会绕过 mode 位。
+# 真机上就撞到过这个假阳性 —— 目录是 nobody:nogroup 0000、只靠 ACL 授给真正的
+# 用户，root 探出来是「读写」，dsh 进去却一个文件都读不了（ISSUES F25）。
+_PROBE_WARNED=0
+probe_as_app() { # $1=test 选项（-r/-w/-x） $2=路径；退出码即结论
+  if [ "$(id -u)" = "0" ] && [ -n "${DSH_USER:-}" ] && [ "$DSH_USER" != "root" ] \
+     && id -u "$DSH_USER" >/dev/null 2>&1; then
+    # 126/127 是「runuser/su 自己没起来」而不是「文件不可读」，那种情况换下一个办法，
+    # 别把它当成权限结论 —— 否则日志会说「进不去」，而真正的原因是工具缺失。
+    if command -v runuser >/dev/null 2>&1; then
+      runuser -u "$DSH_USER" -- /bin/sh -c "test $1 \"\$1\"" sh "$2" 2>/dev/null
+      case $? in
+        126|127) : ;;
+        *) return $? ;;
+      esac
+    fi
+    if command -v su >/dev/null 2>&1; then
+      su -s /bin/sh -c "test $1 \"\$1\"" "$DSH_USER" sh "$2" 2>/dev/null
+      case $? in
+        126|127) : ;;
+        *) return $? ;;
+      esac
+    fi
+    if [ "$_PROBE_WARNED" = "0" ]; then
+      _PROBE_WARNED=1
+      log "WARN: 没有可用的 runuser/su，无法以 $DSH_USER 身份探测权限（下面的可读写按 root 算，可能偏乐观）"
+    fi
+  fi
+  test "$1" "$2"
+}
+
+# 抽查目录里前几条，看应用用户读不读得了。输出 "<读不了数> <抽查数> <首个样本>"
+# 为什么要抽：目录本身可进、里面的文件却全是 0000 时，dsh 的会话里会报一堆
+# 「无法读取」，用户看到的是 agent 在犯傻，实际是这批文件的属主/权限没给 dsh。
+sample_unreadable() { # $1=目录 $2=最多看几条
+  local dir="$1" cap="$2" n=0 bad=0 first="" f
+  while IFS= read -r -d '' f; do
+    n=$((n + 1))
+    if ! probe_as_app -r "$f"; then
+      bad=$((bad + 1))
+      [ -n "$first" ] || first="$(basename "$f")（$(stat -c '%U:%G %a' "$f" 2>/dev/null)）"
+    fi
+    [ "$n" -ge "$cap" ] && break
+  done < <(find "$dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+  printf '%s %s %s' "$bad" "$n" "$first"
+}
+
 log_accessible_paths() {
-  local raw="${TRIM_DATA_ACCESSIBLE_PATHS:-}" p n=0
+  local raw="${TRIM_DATA_ACCESSIBLE_PATHS:-}" p n=0 bad tot ex
   if [ -z "$raw" ]; then
     log "auth-paths: 无（用户未在「访问权限」里授权任何文件夹，dsh 只能访问共享目录）"
     return 0
@@ -403,11 +451,23 @@ log_accessible_paths() {
   for p in $raw; do
     [ -n "$p" ] || continue
     n=$((n + 1))
+    p="${p%/}"
     if [ ! -d "$p" ]; then
       log "auth-paths: $p （不存在）"
-    elif [ ! -r "$p" ] || [ ! -x "$p" ]; then
-      log "auth-paths: $p （目录存在但 $(id -un) 进不去，检查授权是否生效）"
-    elif [ -w "$p" ]; then
+      continue
+    fi
+    if ! probe_as_app -r "$p" || ! probe_as_app -x "$p"; then
+      log "auth-paths: $p （$DSH_USER 进不去；授权没落到应用用户，或上级目录挡住了）"
+      continue
+    fi
+    # 目录能进不等于能用：里面的文件若没给 $DSH_USER 权限，dsh 照样读不了。
+    # 显式给 IFS，不能沿用循环里的 ':'（否则三个字段会被并进第一个）。
+    IFS=' ' read -r bad tot ex <<EOF
+$(sample_unreadable "$p" 6)
+EOF
+    if [ "${bad:-0}" -gt 0 ]; then
+      log "auth-paths: $p （目录可进，但抽查 $tot 项里有 $bad 项 $DSH_USER 读不了，如 $ex；当工作区用时 dsh 会报「无法读取」，要先把这批文件的属主/权限修好）"
+    elif probe_as_app -w "$p"; then
       log "auth-paths: $p （读写）"
     else
       log "auth-paths: $p （只读，当工作区用时写文件会失败）"

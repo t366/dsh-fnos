@@ -97,9 +97,12 @@ bash ~/dsh-fnos/probe/07-cookie-persistence.sh  # 会重启一次应用，验证
 - **可执行位**：`cmd/*` 必须有 x 位，`build.sh` 每次都会补；在 Windows 上编辑后别指望它自己保留。
 - **版本号**：改 `manifest` 的 `version` 才叫新版本。同版本重装会被应用中心静默跳过。
 - **改脚本前先跑本地自测**：`bash fpk/selftest.sh`。Windows 上应为
-  **51 通过 / 24 跳过 / 0 失败**（22 项是权限位、`/proc`、进程组这类 Linux 专属断言，
-  另 2 项是软链相关的跳过）；Linux 上应全绿（数量比 Windows 多 13 项 dsh 模式编排，
-  软链那几条也会真跑）。若在 Windows 上看到共享目录相关的失败，先确认是不是用了旧脚本。
+  **51 通过 / 25 跳过 / 0 失败**（22 项是权限位、`/proc`、进程组这类 Linux 专属断言，
+  另 3 项是软链/降权探测相关的跳过）；Linux 上应全绿（数量比 Windows 多 13 项 dsh 模式编排，
+  软链与 `runuser` 那几条也会真跑）。若在 Windows 上看到共享目录相关的失败，先确认是不是用了旧脚本。
+- **权限探测必须切身份**：`log_accessible_paths()` 里所有 `[ -r ]`/`[ -w ]` 都要走
+  `probe_as_app`，别图省事直接判 —— 生命周期脚本以 root 跑，root 绕过 mode 位，
+  「nobody:0000」的目录会被误判成「读写」，用户照着日志排错只会更迷糊（[ISSUES F25](docs/ISSUES.md)）。
 - **`manifest` 里 `disable_authorization_path` 不许改回 `true`**：那会连带把应用设置里的
   「访问权限」整页隐藏，用户再也没法把任意文件夹授权给 dsh，工作区只剩共享目录
   （[ISSUES F23](docs/ISSUES.md)）。
