@@ -98,7 +98,7 @@ lc() { # 用伪造的 TRIM_* 环境执行生命周期脚本
     TRIM_USERNAME="$(id -un)" \
     TRIM_GROUPNAME="$(id -gn)" \
     TRIM_DATA_SHARE_PATHS="$ROOT/shares/workspace" \
-    TRIM_DATA_ACCESSIBLE_PATHS="${TEST_ACCESSIBLE_PATHS-$ROOT/shares/workspace:$ROOT/shares/not-there}" \
+    TRIM_DATA_ACCESSIBLE_PATHS="${TEST_ACCESSIBLE_PATHS-$ROOT/shares/workspace:$ROOT/shares/photos:$ROOT/shares/not-there}" \
     dsh_bind="${TEST_BIND-127.0.0.1}" \
     dsh_port="$PORT" \
     dsh_apikey="${TEST_API_KEY:-}" \
@@ -114,7 +114,8 @@ trap cleanup EXIT
 
 # ---------------------------------------------------------------- 准备
 step "准备沙箱目录"
-mkdir -p "$ROOT/target" "$ROOT/var" "$ROOT/etc" "$ROOT/home" "$ROOT/shares/workspace" || {
+mkdir -p "$ROOT/target" "$ROOT/var" "$ROOT/etc" "$ROOT/home" "$ROOT/shares/workspace" \
+         "$ROOT/shares/photos" || {
   say "无法创建 $ROOT"
   exit 1
 }
@@ -275,7 +276,32 @@ check "已授权且可写的目录记为读写" "yes" \
 check "不存在的授权路径单独标出" "yes" \
   "$(grep -qF "auth-paths: $ROOT/shares/not-there （不存在）" "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
 check "授权路径条数已统计" "yes" \
-  "$(grep -q 'auth-paths: 共 2 条' "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
+  "$(grep -q 'auth-paths: 共 3 条' "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
+
+step "授权目录的浏览入口（F24：选择工作区目录里点得到）"
+# dsh 的选择器只从 $HOME 起步，且把 home 以下压缩成「主目录」一个面包屑，
+# 用户点不出去。所以启动时要把授权目录软链进 $HOME/可访问目录/。
+LINKS="$HOME_DIR/可访问目录"
+# 决策层（挑哪些路径、跳过哪些）在哪个平台都能验，靠日志；
+# 软链本身在 Windows 上建不了（需要特权），那部分只做 Linux 断言。
+check "授权目录已进入待挂载列表" "yes" \
+  "$(grep -qF "$LINKS/photos" "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
+# 共享目录包含 .dsh-home，链上去会变成 可访问目录/workspace/.dsh-home/可访问目录… 无限递归
+check "包含数据目录的授权路径被跳过（防递归）" "yes" \
+  "$(grep -q 'access-links: 跳过.*（包含 dsh 数据目录' "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
+check "不存在的授权路径不进列表" "yes" \
+  "$(grep -q 'access-links: 跳过.*not-there' "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
+check_linux "软链目录已创建" "yes" "$([ -d "$LINKS" ] && echo yes || echo no)"
+check_linux "软链目录权限" "700" "$(stat -c %a "$LINKS" 2>/dev/null)"
+if ln -s "$ROOT/shares/photos" "$ROOT/link-probe" 2>/dev/null && [ -L "$ROOT/link-probe" ]; then
+  rm -f "$ROOT/link-probe"
+  check "授权目录已挂上来" "yes" "$([ -L "$LINKS/photos" ] && echo yes || echo no)"
+  check "软链指向授权路径本身" "$ROOT/shares/photos" "$(readlink "$LINKS/photos" 2>/dev/null)"
+  check "指向不存在的授权路径不建链" "no" "$([ -e "$LINKS/not-there" ] && echo yes || echo no)"
+  check "包含数据目录的授权路径不建链" "no" "$([ -e "$LINKS/workspace" ] && echo yes || echo no)"
+else
+  say "  跳过软链本身的断言（该文件系统不允许建软链，Linux 上才有意义）"
+fi
 
 step "main status（应为运行中）"
 lc "$HERE/cmd/main" status

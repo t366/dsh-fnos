@@ -542,6 +542,49 @@ dsh 是通用工作台，工作区天然是用户的任意目录。这个字段�
 真机判据在 ISSUES P2（F23 那条）。
 
 
+## 阶段 22（2026-10-28 深夜）　授权目录点不到：选择器从隐藏的家目录起步（F24）
+
+0.6.7 装上后，用户在「访问权限」里把 `存储空间1/T366的文件/Project` 加成「读写」，
+然后在 dsh 里「+ 添加工作区」，弹出的「选择工作区目录」只有
+`channel-pack / openai-gateway / our-free-model / profiles / Project / sessions / storages`
+—— 全是 `.dsh-home` 的内容，授权目录不在里面，也没有上一级可点。
+
+**结论**：F23 打通的是「权限」，这一条断在「导航」。两处源码叠加：
+
+1. `dsh-host-directory-picker-browse` 的 `list(path)`：`path` 缺省时
+   `const target = resolve(path ?? home)`，`home = homedir()`。我们的 `HOME` 是
+   `.dsh-home`，所以首屏就是这个隐藏数据目录。
+2. `dsh-client-ui-directory-picker-browse` 的 `displayCrumbs()`：面包屑里一旦出现
+   `listing.home`，就把它**以上**整段丢掉，只留一个「主目录」按钮 —— 往上走的路被 UI 掐断。
+   唯一出口是右上角铅笔图标（`browser.editPath`）里手打绝对路径。
+
+我上一轮说「权限到位就能自己点过去」是错的：那句话来自 `browse` 后端的 README
+（「全盘可浏览」），确实没有浏览根限制，但**起点**在家目录，而 UI 又不给回头路。
+
+**改动**：
+
+| 位置 | 改动 |
+|---|---|
+| `cmd/main` | 新增 `link_accessible_paths()`：启动前把每个授权目录软链进 `$HOME/可访问目录/`；只清上一轮软链、跳过包含 `.dsh-home` 的路径（防递归）、合并被外层包含的路径、链接名 = 目录名 |
+| `fpk/selftest.sh` | 新增 6 条断言（挂载列表、跳过递归、跳过不存在、目录/权限、软链指向、不建越界链）；测试环境加了一个 `shares/photos` 作为可挂载样本 |
+| `probe/05` | 新增一条：`$HOME/可访问目录` 是否存在、软链是否还有效 |
+| 文档 | ISSUES **F24**（含「为什么不做自动登记」与 0.6.7 上的绕法）、RUNBOOK **5.4**、`fpk/README`、README（含「别把 HOME 挪出去」）、F23 的步骤 2 纠正 |
+| `manifest` | `0.6.8` + changelog |
+
+**几个取舍**：
+
+- **不自动把授权目录登记成工作区**。用户删掉的工作区下次启动又长回来，比多点两下更烦；
+  软链是被动入口，不会和用户的删除打架。
+- **软链放在 `$HOME/可访问目录/` 而不是家目录根**：家目录根已经有 dsh 自己的 `Project`/
+  `sessions`/`storages`，混在一起既容易撞名也让人分不清哪个是应用数据。
+- **链接名不加重命名后缀**（第一版加了，理由是怕撞 `Project`）。实际上链接在子目录里，
+  撞不到；而 dsh 用「选中路径最后一段」当工作区标题，`Project-2` 会直接显示成工作区名。
+
+**验证**：`bash fpk/selftest.sh` → **51 通过 / 24 跳过 / 0 失败**。Windows 上 `ln -s` 需要特权
+（`Operation not permitted`），所以软链本身的断言在那里跳过，但「挑哪些路径」的决策靠日志
+照常断言。真机判据在 ISSUES P2（F24 那条）。
+
+
 ## 下一步
 
 **待办不再在这里维护**——统一见 [ISSUES.md](ISSUES.md) 的「当前剩余问题（P0–P3）」。
@@ -549,7 +592,7 @@ DEVLOG 只记已经发生的事，避免两处列表各说一套。
 
 当前动作只有一件：
 
-> **在 NAS 上打 0.6.7 并覆盖安装** —— `cd ~/dsh-fnos && git pull && cd fpk && bash build.sh full`，
+> **在 NAS 上打 0.6.8 并覆盖安装** —— `cd ~/dsh-fnos && git pull && cd fpk && bash build.sh full`，
 > 然后应用中心「手动安装」选新包（覆盖升级不用卸载）。装完看三件事：
-> 工作区下拉里是否出现「默认工作区」且被勾选；原来的 `Project` 与 4 个会话是否还在；
-> 设置里是否出现「访问权限」页、能否把「我的文件」里的文件夹加为工作区（RUNBOOK 5.3）。
+> 「选择工作区目录」首屏是否有 **「可访问目录」**、里面能否点到刚授权的文件夹、
+> 建出来的工作区路径是不是真实路径（RUNBOOK 5.4）；顺带确认默认工作区仍在（RUNBOOK 5.2）。

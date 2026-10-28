@@ -73,28 +73,44 @@ dsh 每次启动都会 mint 新 token，且没有「固定令牌」开关，所�
 `X-Forwarded-For` / `X-Real-IP` / `Forwarded` 这类代理头，就一律按"来自反代"处理、要求配对**
 （否则反代一挂，公网访客会被当成内网）。这两点都写在代码里，不依赖用户记得。
 
-## 把任意文件夹加为工作区（0.6.7 起）
+## 把任意文件夹加为工作区（0.6.7 起，0.6.8 起可点选）
 
 默认只给了一块共享目录，但 dsh 是通用工作台，你多半想把「我的文件」里现成的文件夹
 直接当工作区。做成两步：
 
 1. 应用中心 → dsh → 设置 → **访问权限** → `+ 添加` → 选文件夹 → 权限选 **读写**；
-2. 回 dsh → 工作区下拉 → **+ 添加工作区** → 从 `/` 或家目录一路点进去 → 选中。
+2. 回 dsh → 工作区下拉 → **+ 添加工作区** → 点首屏的 **「可访问目录」** → 选中（0.6.8 起）。
 
 为什么必须先在「访问权限」里授权：本应用以自己的用户 `dsh` 运行，对用户目录通常没有任何
 权限位（那些目录是 `700`、属主是你本人）。平台在这一页把 ACL 授给 `dsh` 之后，dsh 才进得去。
-而 dsh 的目录选择器在远程访问下走 `browse` 后端（`dsh-host-directory-picker-browse`），
-它按进程权限列举**全盘**、从家目录起步、带 `/` 面包屑，所以权限到位就能自己点过去 ——
-不需要我们再额外映射目录。
+
+**为什么还有「可访问目录」这一层（0.6.8）**：dsh 的目录选择器从 `homedir()` 起步
+（`dsh-host-directory-picker-browse` 的 `list()`），而本应用的家目录是
+`.dsh-home` —— 隐藏的应用数据目录；前端还会把家目录及以下压缩成一个「主目录」面包屑，
+于是进了对话框就再也点不到 `/vol1/1000`。所以启动时会（重新）生成这层软链：
+
+```
+/vol1/@appshare/dsh/workspace/.dsh-home/可访问目录/<文件夹名>  ->  /vol1/1000/.../<文件夹名>
+```
+
+软链只是**入口**：dsh 入库前会 `realpath`，登记的是真实路径。几条规则：
+
+- 只清上一轮的软链，不删真实文件；
+- 授权目录若**包含** `.dsh-home` 就跳过（否则会递归成无限层级）；
+- 被别的授权目录包含的路径合并掉（授权了 `/vol1/1000` 又授权它下面的子目录时只留外层）；
+- 链接名就是文件夹名 —— dsh 拿「选中路径的最后一段」当工作区标题。
 
 两个坑：
 
 - **授权选「读写」**。只读目录能选中、能进，但 dsh 要在工作区里落缓存与产物，写到一半
   失败，看起来像 dsh 的 bug。
 - **授权后不用重启应用**，ACL 是平台立即写的；只有日志里那行 `auth-paths:` 要等重启才更新。
+  但**新增的授权要在「可访问目录」里出现，需要一次重启**（软链是启动时生成的）——
+  临时办法是点对话框右上角的铅笔图标手打绝对路径。
 
 > 0.6.6 及以前 `manifest` 里是 `disable_authorization_path="true"`，这一页是**隐藏的**，
 > 所以那时只能往共享目录里放东西。别再改回去（[ISSUES F23](../docs/ISSUES.md)）。
+> 0.6.7 有权限但没有导航，仍是点不过去（[ISSUES F24](../docs/ISSUES.md)）。
 
 ## 默认工作区（0.6.6 起）
 
@@ -161,7 +177,7 @@ bash ~/dsh-fnos/probe/07-cookie-persistence.sh # 重启后点图标还能不能�
 | `manifest` | 应用元数据。`appname=dsh`、`service_port=3080`、`desktop_applaunchname=dsh.main`；**`disable_authorization_path=false` 不能改回 true**（改了就没了「访问权限」页，见 F23） |
 | `config/privilege` | `run-as: package`，专用用户 `dsh`。**不用 root** |
 | `config/resource` | 声明共享目录 `dsh/workspace`，用户可在文件管理里看到 |
-| `cmd/main` | 核心。`start\|stop\|status\|restart\|url`，status 返回 0/1/3 |
+| `cmd/main` | 核心。`start\|stop\|status\|restart\|url`，status 返回 0/1/3；启动前依次做 `ensure_documents_dir` / `ensure_default_workspace` / `link_accessible_paths` |
 | `cmd/ensure-default-workspace.mjs` | 启动前补登记默认工作区（老用户升级；只加不改、幂等） |
 | `cmd/install_init` | 架构、磁盘（≥1.5GB）、landlock/bwrap 检查 |
 | `cmd/install_callback` | 建 `dsh-home`(700)、写 `settings.conf`(600)、chown 给应用用户 |

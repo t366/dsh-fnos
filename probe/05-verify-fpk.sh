@@ -291,6 +291,23 @@ else
        "要么这次启动发生在 0.6.7 之前，要么 log_accessible_paths 没被调用；重启一次再看"
 fi
 
+# 授权目录的浏览入口（F24）：dsh 的「选择工作区目录」只从 $HOME 起步，且把 home
+# 以下压缩成「主目录」一个面包屑 —— 用户进了这个框根本走不到「我的文件」。
+# 0.6.8 起启动时会把每个授权目录软链进 $HOME/可访问目录/，让它出现在首屏。
+LINKS="$HOME_SHARE/可访问目录"
+if [ -d "$LINKS" ]; then
+  NLINK=0
+  for l in "$LINKS"/*; do
+    [ -L "$l" ] || continue
+    NLINK=$((NLINK + 1))
+    [ -d "$l" ] || warn "软链已失效：$(basename "$l")" "目标 $(readlink "$l" 2>/dev/null) 进不去，检查授权是否还在"
+  done
+  ok "授权目录已挂进选择器首屏（$LINKS，$NLINK 条）" \
+     "$(ls "$LINKS" 2>/dev/null | head -5 | tr '\n' ' ')"
+else
+  warn "没有 $LINKS" "若日志里 access-links 显示「无授权目录」，先授权一个文件夹再重启；有授权却没有这目录，说明 link_accessible_paths 没跑到"
+fi
+
 # ctl_stop 丢了 → 应用中心只给「打开 / 卸载」，没有停止、也没有重启入口。
 # 这条以前没断言，2026-10-27 真机上就是这么暴露的：功能全对，但点不到停止。
 CSTOP="$(mval ctl_stop || true)"
