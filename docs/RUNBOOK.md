@@ -70,7 +70,7 @@ grep -c '@appshare' fpk/build.sh                  # 必须 > 0（F20 的落点�
 
 ---
 
-## 第 2 步　打包（5–15 分钟；包内 977MB，产出 `dsh.fpk` 约 199MB）
+## 第 2 步　打包（5–15 分钟；包内约 997MB，产出 `dsh.fpk` 约 205MB）
 
 ```bash
 cd ~/dsh-fnos/fpk
@@ -79,27 +79,31 @@ bash build.sh full 2>&1 | tee ~/build-$(grep -E '^version' manifest | cut -d'"' 
 
 `build.sh` 会先跑 `selftest.sh`（约 30 秒），自测不过直接中止。
 
-**必须看到这四行，缺一行就是没过：**
+**必须看到这几行，缺一行就是没过：**
 
 ```
-通过 58 / 跳过 0 / 失败 0
+跳过 0 / 失败 0
 dsh 版本校验通过：0.2.1-rc.3
-app/ 文件数：63054
-产物：./dsh.fpk（199M，版本 0.6.0）
+pnpm 自检通过：10.34.9（app/runtime/pnpm 19M）
+app/ 文件数：6.3 万左右
+产物：./dsh.fpk（约 205M，版本 0.6.9）
 ```
 
-- Linux 上「跳过」必须是 **0**。开发机（Windows）上的 22 项跳过是权限位、`/proc`、
+- Linux 上「跳过」必须是 **0**。开发机（Windows）上的 26 项跳过是权限位、`/proc`、
   进程组这些只能在真机判定的断言，这里会真正执行。
-- **通过数只作参考**（本轮 58；每加一条断言就会变），真正的判据是 **`跳过 0 / 失败 0`**。
+- **通过数只作参考**（每加一条断言就会变），真正的判据是 **`跳过 0 / 失败 0`**。
+- **`pnpm 自检通过` 必须出现**（0.6.9 起）：它证明 pnpm 装进了 runtime 且 wrapper 能跑。
+  若在这里 `die`，说明 npm 装 pnpm 失败，先看 `/tmp/dsh-npm-pnpm.log`。
 - `== 版本 ==` 那行必须读到已装版本，形如
-  `已安装：0.5.0（读自 /vol1/@appcenter/dsh/manifest）`。**若显示 `<无>`，先别继续**：
+  `已安装：0.6.8（读自 /vol1/@appcenter/dsh/manifest）`。**若显示 `<无>`，先别继续**：
   那是 F20 的现场（守卫会空转），先按 F20 的候选路径确认包到底在哪。
 - 如果自测开头出现「沙箱内已移除残留的 dsh 运行时」，说明源码树里带着上一次 full
   构建的 `app/runtime/app`（`.gitignore` 的，`git pull` 不会清）。这行是**正常且预期**的
   ——自测已经把它隔离在沙箱外，不影响结论。
 - 自测失败时看它列出的「失败项」；确认与本次改动无关才用 `DSH_SKIP_SELFTEST=1` 跳过，
   不要因为想快点过而跳过。
-- npm 装不上时先看 `/tmp/dsh-npm-install.log`，再确认 registry 能不能连外网。
+- npm 装不上时先看 `/tmp/dsh-npm-install.log`（dsh）与 `/tmp/dsh-npm-pnpm.log`（pnpm），
+  再确认 registry 能不能连外网。
 
 ---
 
@@ -394,6 +398,48 @@ mode `700` —— 这四样正是 dsh 首次启动会在 `$HOME` 下建的东西
 
 > 别用应用启动脚本去自动 `chown` 用户文件：那既越界，又会把 FNOS 的 ACL 冲掉。
 > 应用只负责**说清楚**是权限问题，修数据是用户/管理员的事。
+
+### 5.6　插件能不能装（0.6.9 起，F28）
+
+**先看启动日志有没有把 pnpm 交给 dsh**：
+
+```bash
+grep 'start: pnpm=' /var/apps/dsh/var/info.log | tail -n 2
+```
+
+期望（0.6.9）：
+
+```
+… start: pnpm=/var/apps/dsh/target/runtime/node/bin/pnpm version=10.34.9（已前置到 PATH）
+```
+
+只有 `WARN: 缺少 runtime/node/bin/pnpm` → 装的还是 0.6.8 或更早，装 0.6.9 的包即可。
+
+**再在界面里试一次**：插件 → 添加插件 → 输入包名（例如 `billion-context`）→ 应能读到版本号
+并开始下载，而不是 `spawn pnpm ENOENT`。
+
+装完插件后列表若没变化，**重启应用**：
+
+```bash
+appcenter-cli stop dsh && appcenter-cli start dsh
+```
+
+插件装在 `.dsh-home` 下的 profile 子目录，重启才会重新加载 bundle。直接看落了什么：
+
+```bash
+ls -l /vol1/@appshare/dsh/workspace/.dsh-home/profiles 2>/dev/null
+grep -n '"dependencies"' -A8 /vol1/@appshare/dsh/workspace/.dsh-home/profiles/*/package.json 2>/dev/null
+```
+
+**失败时按报错分流**：
+
+| 报错 | 含义 | 动作 |
+|---|---|---|
+| `spawn pnpm ENOENT` | 包里没有 pnpm（0.6.8 及更早） | 装 0.6.9 |
+| `ERR_PNPM_FETCH_404` / `404` | 包名或版本不存在 | 核对 npm 上的名字（`curl -s https://registry.npmmirror.com/<名字> \| head -c 200`） |
+| `ETIMEDOUT` / `ENETUNREACH` | NAS 出不了外网 | 换 registry 或给 NAS 配代理 |
+| `EACCES` / `EPERM` | 数据目录写不进去 | 见 5.5；插件目录必须在 `.dsh-home` 下 |
+| `unreviewed build scripts` / `allowBuilds` | pnpm 10 默认禁止依赖跑 install 脚本 | 按提示把包名加进 `<profile>/pnpm-workspace.yaml` 的 `allowBuilds`，再重试 |
 
 ---
 

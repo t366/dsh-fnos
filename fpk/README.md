@@ -35,11 +35,13 @@
 ```bash
 cd ~/dsh-fnos/fpk
 bash selftest.sh          # 30 秒，不需要 root、不占 3080
-bash build.sh full        # 捆绑 node + dsh；包内 977MB，压出的 dsh.fpk 约 199MB
+bash build.sh full        # 捆绑 node + dsh + pnpm；包内约 997MB，压出的 dsh.fpk 约 205MB
 ```
 
-`full` 会把 `nodejs_v24` 的 node 与 `@deepseek-ai/dsh@0.2.1-rc.3` 装进 `app/runtime/`
-（版本钉在 `build.sh` 顶部，可用 `DSH_VERSION=` 覆盖，钉版理由见 PLAN §3.2），
+`full` 会把 `nodejs_v24` 的 node、`@deepseek-ai/dsh@0.2.1-rc.3` 与 `pnpm@10.34.9` 装进
+`app/runtime/`（dsh 版本钉在 `build.sh` 顶部，可用 `DSH_VERSION=` 覆盖，钉版理由见 PLAN §3.2；
+pnpm 用 `DSH_PNPM_VERSION=` 覆盖，理由见 [ISSUES F28](../docs/ISSUES.md)：dsh 装插件时只
+`spawn("pnpm")`，运行时里没有它就会报 `spawn pnpm ENOENT`）。
 打完自动复制到共享目录。`bash build.sh`（不带参数）只打骨架包，用占位服务验证安装链路。
 
 `selftest.sh` 会伪造 `TRIM_*` 环境，在临时目录里跑一遍
@@ -111,6 +113,26 @@ dsh 每次启动都会 mint 新 token，且没有「固定令牌」开关，所�
 > 0.6.6 及以前 `manifest` 里是 `disable_authorization_path="true"`，这一页是**隐藏的**，
 > 所以那时只能往共享目录里放东西。别再改回去（[ISSUES F23](../docs/ISSUES.md)）。
 > 0.6.7 有权限但没有导航，仍是点不过去（[ISSUES F24](../docs/ISSUES.md)）。
+
+## 装插件（0.6.9 起）
+
+dsh 的插件管理**全部转发给 pnpm**，而 0.6.8 及更早的包里只有 node 二进制、没有 pnpm，
+所以「添加插件」不管输入什么包名都报 `spawn pnpm ENOENT`（[ISSUES F28](../docs/ISSUES.md)）。
+0.6.9 起运行时自带 pnpm：
+
+1. dsh → 插件 → **添加插件** → 输入包名（或 GitHub 地址 / 本地目录）；
+2. 装完若列表没变化，**重启应用**（插件装在 `.dsh-home` 下的 profile 子目录，重启才重新加载）：
+
+   ```bash
+   appcenter-cli stop dsh && appcenter-cli start dsh
+   ```
+
+3. 自检：`grep 'start: pnpm=' /var/apps/dsh/var/info.log` 应看到
+   `…/runtime/node/bin/pnpm version=10.34.9（已前置到 PATH）`。
+
+需要 NAS 能访问 npm registry（默认走 `registry.npmmirror.com`）。pnpm 10 默认禁止依赖跑
+install 脚本，遇到 `unreviewed build scripts` 时按提示把包名写进
+`<profile>/pnpm-workspace.yaml` 的 `allowBuilds` 再重试。
 
 ## 默认工作区（0.6.6 起）
 
@@ -189,7 +211,8 @@ bash ~/dsh-fnos/probe/07-cookie-persistence.sh # 重启后点图标还能不能�
 | `app/ui/config` | 桌面入口。key 必须 `appname` 前缀 → `dsh.main` |
 | `app/runtime/launcher/` | 入口跳转器（纯 node 内建模块，无依赖） |
 | `app/runtime/stub/` | 骨架包的占位服务 |
-| `build.sh` | NAS 上打包。`bash build.sh` 骨架 / `bash build.sh full` 捆绑 dsh |
+| `app/runtime/pnpm/` | 0.6.9 起：`pnpm@10.34.9`（dsh 装插件用），`node/bin/pnpm` 是它的 wrapper |
+| `build.sh` | NAS 上打包。`bash build.sh` 骨架 / `bash build.sh full` 捆绑 dsh 与 pnpm |
 | `selftest.sh` | 安装前自测，见上文 |
 
 ## 已知限制

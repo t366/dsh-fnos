@@ -46,6 +46,9 @@
 | F23 | 应用设置里没有「访问权限」，任意文件夹都加不成工作区 | 缺陷（权限） | ✅ | `manifest` `disable_authorization_path=false` + `cmd/main` `log_accessible_paths()`；真机 0.6.7 已出现「访问权限」页并成功授权 |
 | F24 | 「选择工作区目录」只列 `.dsh-home`，退不到 `/vol1`，看不到刚授权的文件夹 | 缺陷（导航） | ⚠️ | `cmd/main` `link_accessible_paths()`：授权目录软链进 `$HOME/可访问目录/`；**待装 0.6.8 验证** |
 | F25 | `auth-paths:` 用 root 身份探测，日志写「读写」而 dsh 实际读不了 | 缺陷（假阳性） | ⚠️ | `cmd/main` `probe_as_app()` 切到应用用户 + `sample_unreadable()` 抽查子项；**待装 0.6.8 验证** |
+| F26 | Web 端附件上传全灭：卷目录 000 撞上 dsh 的 fsync-to-root | 缺陷（权限） | ✅ | `chown dsh:dsh` + `chmod o+rx /vol1 /vol1/@appshare`；见正文 |
+| F27 | agent 会话环境三连坑：工作区不可写 / 工具 schema 误导 / 沙箱只读 | 缺陷（环境） | ⚠️ | 坑 1 已结案（走 dsh 授权通道）；坑 2/3 属工具与平台 |
+| F28 | 「添加插件」一律失败：运行时只有 node 二进制，没有 pnpm | 缺陷（打包） | ⚠️ | 0.6.9：`build.sh` 装 pnpm 10.34.9 + `cmd/main` 前置 PATH；**待装包验证** |
 | T1 | 0.5.0 打包与真机安装 | — | ✅ | `probe/05` 33 PASS / 1 WARN / 0 FAIL |
 | T2 | cookie 跨重启 / 令牌是否一次性 | — | ✅ | `probe/07` 10 PASS：令牌可复用、cookie 跨重启存活 |
 | T3 | 端口写死 3080，不可配置 | — | 📋 | 改端口=卸载重装 |
@@ -61,7 +64,8 @@
 
 ## 当前剩余问题（按优先级）
 
-> 截至 2026-10-29 00:35。真机已装 **`0.6.7`**；**`0.6.8`（F24 授权目录导航 + F25 探测身份）待打包安装**。
+> 截至 2026-10-30 21:45。真机已装 **`0.6.7`**（`0.6.8` 的 F24 / F25 是否已装、结果如何未回报）；
+> **`0.6.9`（F28 插件 pnpm）待打包安装**。
 > 只列**还没关闭**的项；已修缺陷见第二节，平台限制见第一节。
 >
 > **已关闭（最近）**：P0 实例归属、F16 的 root 文件残留、T1 / T2（0.5.0 装机验收）、
@@ -87,6 +91,7 @@
 
 | 项 | 判据 | 前置 |
 |---|---|---|
+| **F28 插件安装** | 装 0.6.9 后 `grep 'start: pnpm=' /var/apps/dsh/var/info.log` 出现 `version=10.34.9（已前置到 PATH）`；Web 界面「添加插件」不再报 `spawn pnpm ENOENT`，能读到版本号并开始下载 | 装 0.6.9 |
 | **F22 默认工作区** | 工作区下拉里出现「默认工作区」且处于勾选态；`grep XDG_DOCUMENTS_DIR /vol1/@appshare/dsh/workspace/.dsh-home/.config/user-dirs.dirs` 指向共享目录；原 `Project` 与旧会话仍在 | 0.6.7 已装，等一句确认 |
 | ~~F23 访问权限~~ ✅ | 真机已验证：「访问权限」页出现，`存储空间1/T366的文件/Project` 加成「读写」成功 | 已完成 |
 | **F24 授权目录导航** | 装 0.6.8 后「选择工作区目录」首屏出现「可访问目录」，进去能点到刚授权的文件夹，选中后能建工作区；`ls /vol1/@appshare/dsh/workspace/.dsh-home/可访问目录` 有对应软链 | 装 0.6.8 |
@@ -912,6 +917,167 @@ EACCES。结论：
 处理：Project 的权限史太脏，**不拿它做验收** —— 新建一个干净目录跑 F22/F23/F24；Project 单独
 用 `chown -R 1000:1001` + `chmod -R u+rwX,go+rX` 收拾。命令在 `RUNBOOK.md` 5.5。
 
+
+### F26 Web 端附件上传一律失败：dsh 的 fsync-to-root 撞上飞牛卷目录 000 ✅（2026-10-29 结案）
+
+**现象**（2026-10-29，真机 0.6.x）：dsh Web 聊天里附任何文件（图片未测），卡片显示
+「上传失败，点击重试」，重试无意义。与文件无关：1.7MB PDF 与纯 ASCII 文件名副本同样失败。
+
+**定位过程**（全程未上 NAS）：
+
+1. 本地 `npm pack` 拉下与包内同版本 `@deepseek-ai/dsh@0.2.1-rc.3` 全依赖树，读上传链路：
+   浏览器 Blob Worker XHR → `POST /api/session/uploadFileBinary?sessionId&name`
+   （`application/octet-stream`，流式）→ `FileUploads.uploadStream()` →
+   `LocalAttachmentStore.saveFileStreamVerbatim()` 落盘到 `$DSH_HOME/attachments/v1/`。
+   **该路径对通用文件没有任何大小/类型限制**（图片才有 20MB / png-jpeg-webp-gif 限制），
+   文件名会消毒（`fileLeafName()`）。所以「PDF 不支持」「体积超限」都不成立。
+2. 从开发机经 launcher（内网 auto 放行）拿到 302 目标，令牌换 cookie 后 curl 直打该端点：
+   路由、鉴权、参数校验全部正常（假 sessionId 回规范的 `session/not-found`）。
+3. 拿到真实 sessionId（用户 F12 截图）后端到端复现，**小文件与大 PDF 同错**：
+
+   ```console
+   POST /api/session/uploadFileBinary?sessionId=session-12bf13b0-…&name=…
+   → 200 {"ok":false,"error":{"code":"gateway/internal",
+       "message":"failed to store file upload: Error: EACCES: permission denied,
+                 open '/vol1/@appshare/dsh'"}}
+   ```
+
+**根因（两层，都在文件系统，与 dsh 配置无关）**：
+
+1. `/vol1/@appshare/dsh`（共享目录根）被弄脏成 `root:root 000`——平台卸载「临时改 000」
+   未恢复 + 属主漂移（T11/P6 的坑再+1）。dsh 用户进不去，`runuser -u dsh -- ls` 复现 EACCES。
+2. 修好这层后错误上移到 `/vol1/@appshare`，再取证发现 **`/vol1` 和 `/vol1/@appshare`
+   也是 `root:root 000`**，而 `@appcenter/@appdata/@appconf` 均为出厂 755 —— 000 不是飞牛默认，
+   是同一事故（同日 SSH 主机密钥变更，疑似系统重置/更新）弄脏的。
+
+**为什么卷目录 000 必杀附件功能**：`dsh-attachment-local` 的落盘设计是「durability 证明」——
+`ensureDurableHome()` 以**文件系统根 `/` 为边界**，把 DSH_HOME 的每一层祖先
+`open(dir, O_RDONLY)` + `fsync`（`stageImmutableObject` 写暂存前、`publishImmutableAlias`
+落位后各走一遍）。飞牛对卷目录默认只给应用用户穿越（x）不给读（r）——`test -x` 全过、
+`open(O_RDONLY)` 被拒。**祖先链上任何一层无 r 位，附件功能整体不可用**，且每次上传都撞
+（失败结果不被 `durableHomes` 缓存）。会话/工作区等其余功能不走这条 fsync 链，所以只有上传挂。
+
+**修复（2026-10-29 实测有效）**：
+
+```bash
+chown dsh:dsh /vol1/@appshare/dsh        # 共享目录根属主回 dsh（000 → 700）
+chmod o+rx /vol1 /vol1/@appshare         # 卷目录恢复出厂 755；dsh 需 r 才能 open 做 fsync
+```
+
+改完**无需重启**（fsync 链每次上传现走）。验收：同一真实会话 curl 上传 10B 小文件与
+1.7MB PDF 均 `{"ok":true,"value":{"receiptId":…}}`，PDF 68ms；Web 端重传卡片应变绿。
+
+**安全代价与升级注意**：`o+rx` 让本机普通用户能列出 `/vol1` 与 `@appshare` 的**顶层目录名**；
+各应用/用户数据目录自身仍 700，内容不泄露。这是 dsh「fsync 到根」设计与飞牛「卷目录不开放
+列目录」的硬冲突，二者只能取其一。**任何把 `/vol1`/`@appshare` 改回 000 的平台行为
+（卸载、系统更新）都会让附件再次全灭**，症状：上传回 `EACCES ... open '/vol1/@appshare'`。
+probe/05 的授权目录探测测的是穿越（x），覆盖不到这条 fsync 链（r）。
+
+**教训**：① node 报的 `open '<路径>'` 是**请求目标**，不一定是失败的组件——
+`EACCES open '/vol1/@appshare/dsh'` 修复后变成 `open '/vol1/@appshare'` 是同一代码走得更深了，
+不是权限「变坏」；② `ls 目录` 需要 r，判定穿越要用 `test -x` / `ls -d`；
+③ 本机权限判定不吃 POSIX ACL（F25 结论再次确认），修复只认 `chmod/chown` + `runuser` 实测。
+
+### F27 dsh agent 会话环境三连坑：工作区不可写 / 检查工具 schema 误导 / 沙箱只读 ⚠️→坑1已结案（2026-10-29 自会话导出日志分析）
+
+**来源**：会话 `session-12bf13b0` 导出包（`session.v4.jsonl`，192 事件，模型 kilo-auto/free），
+任务「创建一个联网搜索 DSH 插件」。无崩溃（9 个 job 全 completed），但流程被三类环境问题打断：
+
+**坑 1：会话工作区 `/vol1/1000/Project` 对 dsh 用户不可写**✅（2026-10-29 结案）
+（浪费 3 次调用 + 逼出权限提升）。会话时点属主是 `nobody:nogroup`（事故残留），
+随后被改回 `T366:Users 755`，且 ACL 里**已写明 `user:dsh:rwx`、`mask::rwx`**——
+但 `runuser -u dsh` 实测 mkdir 仍被拒，**POSIX ACL 在平台共享目录上不生效**（F25 结论第三次验证），
+`/vol1/1000` 本身 000 也照样可穿越（`test -x` 过）。硬写 chmod/setfacl 均无效。
+**有效修法 = 走 dsh 自己的目录授权通道**：dsh Web 界面「访问权限/可访问目录」里把
+`/vol1/1000/Project` 授权为读写 → 重启应用 → `auth-paths:` 登记为「读写」
+（20:02 生效）→ `runuser -u dsh` 实测 `mkdir` 通过（`dsh-write-ok`）。
+另：owner 基础权限曾为 `user::---`（T366 对自己目录无基础位），已用
+`setfacl -m u::rwx,g::r-x /vol1/1000/Project` 补回。
+**教训**：这台机器上给应用授目录权限，**只认 dsh「访问权限」授权 + 平台权限库，
+不认文件系统层的手工 ACL/mode**；诊断时 `getfacl` 只能当参考，`runuser` 实测才算数。
+
+**坑 2：`cordis_inspect_query` 的 `input` schema 误导**（连续 6 次调用被拒）。
+报错 `"input" must be an object`，但 agent 传 `{service:"web"}`、`{}`、嵌套包一层全被拒——
+schema 声明 input 可选、additionalProperties true，实际校验却不是。6 次浪费才摸对调法，
+属于工具 schema 与实现不一致的可用性问题（kilo-auto/free 的 agent 在 thinking 里明确困惑）。
+
+**坑 3：workspace-write 沙箱把 `/vol1/@appshare/dsh/workspace` 当只读**。
+bash `mkdir` 报 `Read-only file system`（write 工具却能直接写入——两通道策略不一致），
+需要 escalation 到 danger-full-access 才能继续，一次任务里 **3 次 allowed-once 审批打断**。
+结束后用户把权限**永久**切到 `danger-full-access` + `approval never`——
+注意该变更跨会话持久，**插件装完建议改回 `workspace-write` + `ask`**，否则后续会话全程无审批。
+
+**附**：kilo-auto/free 把 reasoning 独白混进 assistant 正文（3 段困惑自言自语直接展示给用户），
+观感问题，留意是否模型侧未分离 reasoning 通道。
+
+### F28 Web 界面「添加插件」一律失败：运行时里没有 pnpm ⚠️（2026-10-30 修复，待真机验证）
+
+**现象**（0.6.x 真机）：Web 界面 → 插件 → 添加插件，输入任意包名（本次是 `billion-context`）
+都回同一句：
+
+```console
+无法获取插件信息: Command failed with ENOENT: pnpm view billion-context name version
+description dsh --json --registry=https://registry.npmmirror.com/ --config.fetch-retries=0
+spawn pnpm ENOENT
+```
+
+**先排除包名**：`billion-context` 在 npmmirror 上存在（latest `0.1.209`，2026-10-30 实查）。
+`spawn pnpm ENOENT` 是 Node `child_process` 在 PATH 上找不到可执行文件时的原话，
+与包名、registry、网络都无关。
+
+**根因**：dsh 自己不做包管理，插件安装/查询全部**转发给 pnpm**（`dsh plugin …` 原样转给
+pnpm，Web 端走同一套 `runPluginCommand`），而且 spawn 的是裸命令名 `pnpm`，只认 PATH。
+本应用的运行时是从 `nodejs_v24` 里**只拷了 `bin/node` 一个文件**（`build.sh` 原注释：
+「npm/npx 是软链，运行 dsh 用不到」）—— 这句话在 0.6.8 之前成立，从插件功能要用 pnpm
+那一刻起就不成立了。
+
+| 检查 | 结果 |
+|---|---|
+| `runtime/node/bin/` 内容 | 只有 `node`（无 npm / npx / pnpm） |
+| 系统 PATH 有没有 pnpm | 没有（fnOS 不带，`nodejs_v24` 应用里也没有） |
+| 包是否存在 | 存在，与本次失败无关 |
+
+**修法（0.6.9）**：
+
+| 位置 | 改动 |
+|---|---|
+| `build.sh` | full 模式把 `pnpm@10.34.9` 装进 `app/runtime/pnpm`，在 `app/runtime/node/bin/pnpm` 生成 sh wrapper；打包前用 `pnpm --version` 自检，装不起来就中止 |
+| `cmd/main` | 启动时若 wrapper 存在则 `export PATH="$RUNTIME/node/bin:$PATH"`，日志写 `start: pnpm=… version=…`；缺失只 WARN，不阻断启动 |
+| `selftest.sh` | 断言日志里有 pnpm 路径、版本取自包元数据；Linux 上再读子进程 `/proc/<pid>/environ` 确认 PATH 真被前置（只信日志会被「写了但没 export」骗过） |
+| `manifest` | `0.6.9` + changelog |
+
+**为什么钉 10.34.9，而不是 latest（12.x）**：dsh 的引导文案让用户改
+`pnpm-workspace.yaml` 里的 `allowBuilds`，这个字段 **10.26** 才引入，v11 起成为唯一写法
+（`onlyBuiltDependencies` 等被移除）。10.34.9 是 10.x 最新维护版（engines `node>=18.12`），
+与自带 node 24 兼容；12.x 才发布几个月，没必要替 dsh 冒这个险。
+
+**为什么用 wrapper 而不是软链**：pnpm 的 shebang 是 `#!/usr/bin/env node`，会命中系统
+PATH 上的 v22.19（`cmd/main` 头部注释就记着这个坑）；wrapper 显式 `exec "$here/node"`，
+让 pnpm 与 dsh 跑在同一个 v24 上（`process.execPath` 也决定子脚本用哪个 node）。
+顺带绕开软链在 fpk 解包/复制时断链的风险（F20）。
+
+**临时解法（不想等打包时）**：NAS 上以 root 手工补一份，再把入口链进系统 PATH：
+
+```bash
+R=/var/apps/dsh/target/runtime
+cd "$R" && /var/apps/nodejs_v24/target/bin/npm install --prefix pnpm pnpm@10.34.9
+cat > "$R/node/bin/pnpm" <<'EOF'
+#!/bin/sh
+here=$(cd "$(dirname "$0")" && pwd)
+exec "$here/node" "$here/../pnpm/node_modules/pnpm/bin/pnpm.cjs" "$@"
+EOF
+chmod +x "$R/node/bin/pnpm"
+ln -sf "$R/node/bin/pnpm" /usr/local/bin/pnpm    # dsh 进程的 PATH 含 /usr/local/bin
+appcenter-cli restart dsh
+```
+
+代价：`/usr/local/bin/pnpm` 落在系统盘，重装要重做；`target/` 被新包替换后若没带 pnpm，
+软链会悬空。**正解仍是装 0.6.9**。
+
+**验收判据**：`grep 'start: pnpm=' /var/apps/dsh/var/info.log` 出现
+`…/runtime/node/bin/pnpm version=10.34.9（已前置到 PATH）`；然后在 Web 界面添加插件，
+错误应从「无法获取插件信息」变成能读到版本号并开始下载；装完若列表没变化，重启应用一次
+（插件装进 `.dsh-home` 下的 profile 子目录，重启才会重新加载 bundle）。
 
 ---
 

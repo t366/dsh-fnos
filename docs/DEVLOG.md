@@ -651,3 +651,78 @@ DEVLOG 只记已经发生的事，避免两处列表各说一套。
 > 「选择工作区目录」首屏是否有 **「可访问目录」**、里面能否点到刚授权的文件夹、
 > 建出来的工作区路径是不是真实路径（RUNBOOK 5.4）、`auth-paths:` 是否如实标出
 > 「读不了」而不是继续写「读写」（RUNBOOK 5.5）。顺带确认默认工作区仍在（RUNBOOK 5.2）。
+
+
+## 阶段 25（2026-10-29）　Web 端附件上传全灭：卷目录 000 撞上 dsh 的 fsync-to-root（F26）
+
+用户在 dsh Web 里附 PDF 一直「上传失败，点击重试」。全程未上 NAS 定位：
+
+1. 本地拉同版本 `@deepseek-ai/dsh@0.2.1-rc.3` 全依赖树读代码——上传对通用文件
+   无大小/类型限制，「文件不合规」全部排除；浏览器 Blob Worker XHR →
+   `POST /api/session/uploadFileBinary` → `saveFileStreamVerbatim()` 落盘。
+2. 开发机经 launcher 302 拿令牌换 cookie，curl 直打真实会话端到端复现：
+   小文件与 1.7MB PDF 同回 `gateway/internal` + 底层 `EACCES`。DevTools 的
+   「连接中断」是 Worker 传完即销毁、事后取不到响应体的假象。
+3. 真机取证逐层排：共享目录根 `000 root:root`（chown dsh:dsh 修复）→ 错误上移到
+   `/vol1/@appshare` → 发现 `/vol1`、`@appshare` 也是 000（同日系统重置/更新所致，
+   `@appcenter/@appdata/@appconf` 均为出厂 755）。
+4. 读了 `dsh-attachment-local` 才定性：落盘前要把 DSH_HOME 每层祖先
+   `open(O_RDONLY)+fsync` 到文件系统根，飞牛卷目录 000（无 r 位）必杀这条链。
+
+修复 `chown dsh:dsh /vol1/@appshare/dsh` + `chmod o+rx /vol1 /vol1/@appshare`，无需重启。
+验收：同会话 curl 传 10B 与 1.7MB PDF 均 `{"ok":true}`，PDF 68ms。详见 ISSUES F26。
+
+**升级注意**：任何把 `/vol1`/`@appshare` 改回 000 的平台行为都会让附件再次全灭。
+
+
+## 阶段 26（2026-10-30 21:45）　「添加插件」全灭：dsh 只转发给 pnpm，而包里没有 pnpm（F28）
+
+用户在 Web 界面添加插件（包名 `billion-context`）报：
+
+```console
+无法获取插件信息: Command failed with ENOENT: pnpm view billion-context name version
+description dsh --json --registry=https://registry.npmmirror.com/ --config.fetch-retries=0
+spawn pnpm ENOENT
+```
+
+**先排除的三个方向**（都没花打包时间，纯查证）：
+
+| 怀疑 | 查法 | 结论 |
+|---|---|---|
+| 包名写错 / 包不存在 | `curl registry.npmmirror.com/billion-context` | 存在，latest `0.1.209` |
+| dsh 版本太老没有插件功能 | 截图里有完整「添加插件」表单 | 功能在，是执行层失败 |
+| 网络 / 镜像不可达 | 报错是 ENOENT 不是 ETIMEDOUT | 根本没发起请求 |
+
+**根因**在本机源码里就能定位：`dsh` 的 `lib/plugin-*.js` 把插件操作**原样转发给 pnpm**
+（`runPluginCommand` / `runProfilePnpm`），且失败分支专门写了
+`exitCode === 127 → "pnpm was not found; install pnpm and make it available on PATH"`。
+而我们的 `build.sh` 只 `cp "$NODE_SRC/bin/node"`，注释还写着「npm/npx 是软链，运行 dsh 用不到」。
+那句话在「插件」这个功能出现之前是对的。
+
+**改动**：
+
+| 位置 | 改动 |
+|---|---|
+| `build.sh` | full 模式 `npm install --prefix app/runtime/pnpm pnpm@10.34.9`；在 `app/runtime/node/bin/pnpm` 生成 sh wrapper；打包前 `pnpm --version` 自检，不符即 `die` |
+| `cmd/main` | 启动时 wrapper 存在则 `export PATH="$RUNTIME/node/bin:$PATH"`，日志记 `start: pnpm=… version=…`；缺失只 WARN，不阻断 |
+| `selftest.sh` | 造一个「假 pnpm」验证前置链：断言日志里的路径与版本来自包元数据；Linux 上读 `/proc/<pid>/environ` 确认 PATH 真进了子进程 |
+| `manifest` | `0.6.9` + changelog 前置一段（0.6.9 的根因、版本理由、插件落点） |
+| 文档 | ISSUES **F28** + 总表补 F26/F27/F28；本段 |
+
+**两个版本判断**：
+
+- **钉 pnpm 10.34.9，不追 latest 12.x**：dsh 的引导文案让用户改
+  `pnpm-workspace.yaml` 的 `allowBuilds`；查官方文档，这个字段 10.26 才引入，v11 起成为
+  唯一写法（`onlyBuiltDependencies` / `neverBuiltDependencies` 被移除）。10.34.9 是 10.x
+  最新维护版，engines `node>=18.12`；12.x 发布才两个月，没有必须冒的风险。
+- **wrapper 而非软链**：pnpm 的 shebang 是 `#!/usr/bin/env node`，会命中系统 PATH 的 v22.19
+  ——这正是 `cmd/main` 头部第 4 条设计要点记着的坑。wrapper 里 `exec "$here/node"`，
+  pnpm 与 dsh 用同一个 v24，`process.execPath` 也就不会指向别的 node。
+
+**验证**：`bash fpk/selftest.sh` → **53 通过 / 26 跳过 / 0 失败**（原 51/25）。
+第一次跑挂在「pnpm 版本取自包元数据（实际 未知）」：我用 `sed` 按**行首**匹配 `"version"`，
+而测试造的 package.json 是单行。改成用 node 解析 JSON —— 真实 pnpm 的 package.json 虽是多行，
+但「依赖 JSON 排版」本身就是个不该留的假设（F24 的教训：别让判据依赖偶然成立的格式）。
+
+**没验的**：真机装 0.6.9 后 pnpm 能否真的 `add` 成功（store、registry、磁盘都在 NAS 上）。
+判据写在 ISSUES P2 的 F28 那行。
