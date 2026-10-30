@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Web Search (DuckDuckGo)",
+    "description": "Adds a DuckDuckGo Lite search provider to the web capability. No API key required; results are parsed from the Lite HTML endpoint."
+  }
+}

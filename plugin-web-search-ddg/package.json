@@ -1,0 +1,14 @@
+{
+  "name": "@local/web-search-ddg",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "DuckDuckGo Lite web search provider for dsh (no API key required)",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": ["index.js", "cordis.patch.yml", "locale/*.json", "icon.svg"],
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}

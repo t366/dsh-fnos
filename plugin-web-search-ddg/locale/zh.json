@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "联网搜索（DuckDuckGo）",
+    "description": "为 dsh 的联网能力添加 DuckDuckGo Lite 搜索源。无需 API 密钥，从 Lite HTML 端点解析搜索结果。"
+  }
+}
