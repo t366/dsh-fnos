@@ -127,6 +127,13 @@ try{const b=fs.readFileSync(process.argv[1]);
     else
       warn "没有捆绑 node" "会回退到 /var/apps/nodejs_v24（需 >= 24.9）"
     fi
+    # F28：dsh 装插件时 spawn 的是裸命令 "pnpm"（只认 PATH），包里没有它，
+    # Web 界面「添加插件」就一律报 spawn pnpm ENOENT，与包名无关。
+    if [ -x "$TARGET/runtime/node/bin/pnpm" ]; then
+      ok "插件用 pnpm" "$("$TARGET/runtime/node/bin/pnpm" --version 2>&1 | head -n1)"
+    else
+      bad "缺少 pnpm" "dsh 里「添加插件」会报 spawn pnpm ENOENT（0.6.9 起应自带 runtime/node/bin/pnpm）"
+    fi
   elif [ -f "$TARGET/runtime/stub/server.mjs" ]; then
     warn "骨架包（stub）" "未捆绑 dsh，只验证安装链路"
   else

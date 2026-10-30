@@ -133,6 +133,22 @@ if [ -e "$ROOT/target/runtime/app" ]; then
   rm -rf "$ROOT/target/runtime/app"
   say "沙箱内已移除残留的 dsh 运行时——本段按骨架模式判定"
 fi
+
+# ---- 假 pnpm：验证「把 runtime/node/bin 前置进 PATH」这条链（F28）----
+# dsh 装插件时 spawn 的是裸命令名 "pnpm"，只认 PATH。真 pnpm 有 19MB，
+# 自测不需要它装包，只需要一个「能被找到」的可执行文件。
+# 这里不验证 pnpm 的路径解析（那由 build.sh 里 `pnpm --version` 自检负责，
+# 因为沙箱里没有 runtime/node/bin/node），只验证 cmd/main 有没有做前置。
+mkdir -p "$ROOT/target/runtime/node/bin" "$ROOT/target/runtime/pnpm/node_modules/pnpm/bin"
+printf '{"name":"pnpm","version":"9.9.9-selftest"}\n' \
+  >"$ROOT/target/runtime/pnpm/node_modules/pnpm/package.json"
+cat >"$ROOT/target/runtime/node/bin/pnpm" <<'EOP'
+#!/bin/sh
+# 自测专用假 wrapper：真实版本由 build.sh 生成并自检
+printf '9.9.9-selftest\n'
+EOP
+chmod +x "$ROOT/target/runtime/node/bin/pnpm" 2>/dev/null || true
+
 say "工作目录：$ROOT"
 
 # ---------------------------------------------------------------- install
@@ -173,6 +189,22 @@ check "start 退出码" "0" "$START_RC"
 # 很容易被误判成入口坏掉。单独断言模式，出问题一眼能分清是「模式错位」还是「HTTP 坏了」。
 check "本段跑的是骨架模式" "yes" \
   "$(grep -q 'start: mode=stub' "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
+
+# F28：插件管理靠 PATH 上的 pnpm。这里断言两件事：
+#   ① cmd/main 认出了 runtime/node/bin/pnpm（而不是回落到 WARN）；
+#   ② 它真的把该目录前置进了子进程环境（只看日志会被「写了日志但没 export」骗过）。
+check "启动日志记录了 pnpm 路径" "yes" \
+  "$(grep -qF "pnpm=$ROOT/target/runtime/node/bin/pnpm" "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
+check "pnpm 版本取自包元数据" "9.9.9-selftest" \
+  "$(grep -o 'version=[^（]*' "$ROOT/var/info.log" 2>/dev/null | tail -n1 | cut -d= -f2-)"
+SPID="$(cut -d' ' -f1 "$ROOT/var/dsh.pid" 2>/dev/null || true)"
+if [ "$LINUX" = "yes" ] && [ -n "${SPID:-}" ] && [ -r "/proc/$SPID/environ" ]; then
+  check_linux "子进程 PATH 已前置 runtime/node/bin" "yes" \
+    "$(tr '\0' '\n' <"/proc/$SPID/environ" 2>/dev/null | grep -m1 '^PATH=' | grep -qF "$ROOT/target/runtime/node/bin" && echo yes || echo no)"
+else
+  SKIP=$((SKIP + 1))
+  printf '  \033[33mSKIP\033[0m  子进程 PATH 已前置 runtime/node/bin（非 Linux 或无 /proc）\n'
+fi
 
 if [ "$START_RC" != "0" ] && [ -s "$ROOT/trim-err.txt" ]; then
   say "  用户在应用中心会看到："

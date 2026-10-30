@@ -6,6 +6,8 @@ app.tgz
 # 运行时（由 build.sh full 在构建机现场生成，体积约 900MB，永不入库）
 fpk/app/runtime/node/
 fpk/app/runtime/app/
+# pnpm 也是现场装的（0.6.9 起，约 20MB；dsh 装插件时 spawn 它）
+fpk/app/runtime/pnpm/
 
 # 依赖
 node_modules/
@@ -16,6 +18,9 @@ node_modules/
 .v/
 .u/
 .leftover-*/
+
+# Agent 工作区：解开来的 dsh 源码（~870MB）、探针输出、临时脚本，都不入库
+.workbuddy/
 
 # 编辑器与系统
 .DS_Store

@@ -773,6 +773,23 @@ do_start() {
   NODE_BIN="$(find_node)" || die "未找到可用的 Node 运行时（需要 >= 24.9）。请重新安装应用，或在应用中心安装 Node.js v24。"
   export NODE_BIN
 
+  # dsh 的插件管理全部转发给 pnpm（`pnpm view` / `pnpm add`），而且是 spawn 裸命令名，
+  # 只认 PATH。我们的运行时只拷了 node 二进制（没有 npm/npx），系统 PATH 里也没有
+  # pnpm → Web 界面「添加插件」一律报 `spawn pnpm ENOENT`，与包名无关（F28）。
+  # build.sh 把 pnpm 装在 runtime/pnpm，并在 runtime/node/bin 放同名 wrapper；
+  # 前置这个目录一次解决两件事：pnpm 可见；pnpm 用自带 node 跑，而不是系统 v22。
+  if [ -x "$RUNTIME/node/bin/pnpm" ]; then
+    export PATH="$RUNTIME/node/bin:$PATH"
+    local pnpm_ver=""
+    # 用 node 解析而不是 sed/grep 抓行：package.json 可能是压缩成一行发布的，
+    # 「按行首匹配 "version"」会静默取空，日志里就成了「未知」，排错时误导方向。
+    pnpm_ver="$("$NODE_BIN" -e 'try{process.stdout.write(String(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).version||""))}catch(e){}' \
+      "$RUNTIME/pnpm/node_modules/pnpm/package.json" 2>/dev/null || true)"
+    log "start: pnpm=$RUNTIME/node/bin/pnpm version=${pnpm_ver:-未知}（已前置到 PATH）"
+  else
+    log "WARN: 缺少 runtime/node/bin/pnpm —— dsh 里装插件会报 spawn pnpm ENOENT（需 0.6.9+ 的完整包）"
+  fi
+
   local bind
   bind="$(resolve_bind "${DSH_BIND:-auto}")"
   [ -n "$bind" ] || die "无法探测监听地址。请在应用设置里手动指定本机的一个局域网 IP。"

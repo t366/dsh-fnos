@@ -22,6 +22,11 @@ cd "$HERE"
 
 MODE="${1:-skeleton}"
 DSH_VERSION="${DSH_VERSION:-0.2.1-rc.3}"
+# dsh 自己不实现包管理：插件安装/查询全部转发给 pnpm（`pnpm view`、`pnpm add`），
+# 而且只认 PATH 上的裸命令 "pnpm" → 不带 pnpm 时 Web 界面报 `spawn pnpm ENOENT`。
+# 钉 10.x 的理由：dsh 的引导文案让用户改 pnpm-workspace.yaml 里的 allowBuilds，
+# 这个字段 10.26 才有（v11 起只认它）；10.34.9 是 10.x 的最新维护版，仍支持 node 18+。
+DSH_PNPM_VERSION="${DSH_PNPM_VERSION:-10.34.9}"
 NODE_SRC="${NODE_SRC:-/var/apps/nodejs_v24/target}"
 
 say() { printf '%s\n' "$*"; }
@@ -306,6 +311,41 @@ if [ "$MODE" = "full" ]; then
     [ "$GOT" = "$DSH_VERSION" ] || die "版本不符：请求 $DSH_VERSION，实际装到 ${GOT:-未知}"
     say "dsh 版本校验通过：$GOT"
   )
+
+  # ---- pnpm：dsh 装插件时唯一的包管理器（版本理由见文件头 DSH_PNPM_VERSION）----
+  # 放在 runtime/pnpm 而不是 app/node_modules：dsh 每次 full 构建都会整棵树重装，
+  # 混进去会让「这是 dsh 的依赖还是我们的工具」说不清，也容易被一起清掉。
+  rm -rf app/runtime/pnpm
+  mkdir -p app/runtime/pnpm
+  say "安装 pnpm@$DSH_PNPM_VERSION ..."
+  printf '{"name":"dsh-runtime-pnpm","private":true}\n' >app/runtime/pnpm/package.json
+  "$NODE_SRC/bin/npm" install --omit=dev --no-audit --no-fund \
+    --prefix "$PWD/app/runtime/pnpm" "pnpm@$DSH_PNPM_VERSION" \
+    >/tmp/dsh-npm-pnpm.log 2>&1 || { tail -n 30 /tmp/dsh-npm-pnpm.log; die "pnpm 安装失败"; }
+  PNPM_JS="app/runtime/pnpm/node_modules/pnpm/bin/pnpm.cjs"
+  [ -f "$PNPM_JS" ] || die "安装后找不到 $PNPM_JS，pnpm 没有真正装成功"
+
+  # 用 sh wrapper 而不是软链：
+  #   · spawn 找的是裸命令名 "pnpm"，所以必须有一个可执行文件进 PATH；
+  #   · pnpm 自带的 shebang 是 `#!/usr/bin/env node`，会命中系统 PATH 里的 v22，
+  #     而 dsh 跑在自带 v24 上 —— 版本错位时 pnpm 的引擎检查/子脚本行为都会跑偏；
+  #   · 软链在 fpk 解包或复制时容易断（F20 就是路径假设踩的），wrapper 不依赖 inode。
+  cat >app/runtime/node/bin/pnpm <<'WRAP'
+#!/bin/sh
+# 由 build.sh 生成，勿手改。
+# 布局：runtime/node/bin/pnpm  ->  ../pnpm/node_modules/pnpm/bin/pnpm.cjs
+here=$(cd "$(dirname "$0")" && pwd)
+exec "$here/node" "$here/../pnpm/node_modules/pnpm/bin/pnpm.cjs" "$@"
+WRAP
+  chmod +x app/runtime/node/bin/pnpm
+
+  # 自检：wrapper 必须真能跑。装不起来的 pnpm 比没有 pnpm 更糟 —— 它会把
+  # 「命令不存在」伪装成插件不兼容，用户只会回去查包名。
+  PNPM_GOT="$(PATH="$PWD/app/runtime/node/bin:$PATH" pnpm --version 2>&1)" \
+    || die "pnpm wrapper 无法运行：$PNPM_GOT"
+  [ "$PNPM_GOT" = "$DSH_PNPM_VERSION" ] \
+    || die "pnpm 版本不符：期望 $DSH_PNPM_VERSION，实际 $PNPM_GOT"
+  say "pnpm 自检通过：$PNPM_GOT（app/runtime/pnpm $(du -sh app/runtime/pnpm 2>/dev/null | awk '{print $1}')）"
   say "运行时就绪"
 else
   [ -f app/runtime/stub/server.mjs ] || die "骨架模式下缺少 app/runtime/stub/server.mjs"
