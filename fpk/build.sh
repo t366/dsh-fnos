@@ -333,15 +333,24 @@ if [ "$MODE" = "full" ]; then
   cat >app/runtime/node/bin/pnpm <<'WRAP'
 #!/bin/sh
 # 由 build.sh 生成，勿手改。
-# 布局：runtime/node/bin/pnpm  ->  ../pnpm/node_modules/pnpm/bin/pnpm.cjs
+# 布局：runtime/node/bin/pnpm  ->  ../../pnpm/node_modules/pnpm/bin/pnpm.cjs
+# 注意这里是两级向上：$here 已经是 runtime/node/bin，上一级是 runtime/node。
 here=$(cd "$(dirname "$0")" && pwd)
-exec "$here/node" "$here/../pnpm/node_modules/pnpm/bin/pnpm.cjs" "$@"
+pnpm_js="$here/../../pnpm/node_modules/pnpm/bin/pnpm.cjs"
+if [ ! -f "$pnpm_js" ]; then
+  printf 'pnpm: 找不到 %s（运行时安装不完整，请重装应用）\n' "$pnpm_js" >&2
+  exit 127
+fi
+exec "$here/node" "$pnpm_js" "$@"
 WRAP
   chmod +x app/runtime/node/bin/pnpm
 
   # 自检：wrapper 必须真能跑。装不起来的 pnpm 比没有 pnpm 更糟 —— 它会把
   # 「命令不存在」伪装成插件不兼容，用户只会回去查包名。
-  PNPM_GOT="$(PATH="$PWD/app/runtime/node/bin:$PATH" pnpm --version 2>&1)" \
+  # 这条自检必须从 **别的目录** 调用：在 fpk/ 下调用时相对路径恰好也能解析对
+  # （cwd 与脚本位置重合），只有换 cwd 才能证明 wrapper 找的是自己旁边的文件。
+  PNPM_BIN_DIR="$PWD/app/runtime/node/bin"
+  PNPM_GOT="$(cd / && PATH="$PNPM_BIN_DIR:$PATH" pnpm --version 2>&1)" \
     || die "pnpm wrapper 无法运行：$PNPM_GOT"
   [ "$PNPM_GOT" = "$DSH_PNPM_VERSION" ] \
     || die "pnpm 版本不符：期望 $DSH_PNPM_VERSION，实际 $PNPM_GOT"

@@ -1056,6 +1056,24 @@ PATH 上的 v22.19（`cmd/main` 头部注释就记着这个坑）；wrapper 显�
 让 pnpm 与 dsh 跑在同一个 v24 上（`process.execPath` 也决定子脚本用哪个 node）。
 顺带绕开软链在 fpk 解包/复制时断链的风险（F20）。
 
+**第一次 NAS 构建的翻车（2026-10-30 22:10，自检拦住，没出废包）**：
+
+```console
+ERROR: pnpm wrapper 无法运行：Error: Cannot find module
+'/root/dsh-fnos/fpk/app/runtime/node/pnpm/node_modules/pnpm/bin/pnpm.cjs'
+```
+
+wrapper 里的相对路径少写了一级 ——`$here` 已经是 `runtime/node/bin`，`../pnpm` 指向
+`runtime/node/pnpm`（不存在），正确是 `../../pnpm`。教训不在算术，而在**这条路径从来没被
+执行过**：本地自测的假 wrapper 只 `printf` 一个版本号，压根不碰 pnpm.cjs；而 build.sh 里
+`pnpm --version` 那条自检是**第一次真正跑它**的地方 —— 自检写作的代价是十分钟，不写的代价
+是一个装得上、但插件永远报 ENOENT 的包。
+
+现在 wrapper 自己也带一句「找不到 cjs 就 127 + 明确提示」，并且 `selftest.sh` 把 build.sh 里
+的 heredoc **原样抽出来**、按真实布局（`runtime/node/bin/` 与 `runtime/pnpm/`）在沙箱跑一遍、
+故意换 cwd 调用，层数写错当场失败（`wrapper 能找到 pnpm.cjs（换 cwd 调用）` 那条）。这条断言做过反向验证：把 `../../pnpm`
+改回 `../pnpm`，自测立刻报 `找不到 …/node/bin/../pnpm/…`，改回即通过。
+
 **临时解法（不想等打包时）**：NAS 上以 root 手工补一份，再把入口链进系统 PATH：
 
 ```bash

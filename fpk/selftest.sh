@@ -137,8 +137,9 @@ fi
 # ---- 假 pnpm：验证「把 runtime/node/bin 前置进 PATH」这条链（F28）----
 # dsh 装插件时 spawn 的是裸命令名 "pnpm"，只认 PATH。真 pnpm 有 19MB，
 # 自测不需要它装包，只需要一个「能被找到」的可执行文件。
-# 这里不验证 pnpm 的路径解析（那由 build.sh 里 `pnpm --version` 自检负责，
-# 因为沙箱里没有 runtime/node/bin/node），只验证 cmd/main 有没有做前置。
+# 这里只验证 cmd/main 有没有做前置；wrapper 自身能不能解析到 pnpm.cjs 由
+# 下面那段「按真实布局跑模板」负责（沙箱里的 runtime/node/bin 没有真 node，
+# 所以不能直接用这个假 wrapper 去验证路径）。
 mkdir -p "$ROOT/target/runtime/node/bin" "$ROOT/target/runtime/pnpm/node_modules/pnpm/bin"
 printf '{"name":"pnpm","version":"9.9.9-selftest"}\n' \
   >"$ROOT/target/runtime/pnpm/node_modules/pnpm/package.json"
@@ -148,6 +149,32 @@ cat >"$ROOT/target/runtime/node/bin/pnpm" <<'EOP'
 printf '9.9.9-selftest\n'
 EOP
 chmod +x "$ROOT/target/runtime/node/bin/pnpm" 2>/dev/null || true
+
+# ---- wrapper 模板的路径深度（F28 回归）----
+# build.sh 里的 wrapper 是从 runtime/node/bin 往上找 pnpm 的，层数写错不会在
+# 本地暴露，只会在 NAS 上白等一轮 full 构建（0.6.9 发布前踩过：写成 ../pnpm，
+# 落到了 runtime/node/pnpm 这个不存在的目录）。
+# 这里把 build.sh 的 heredoc 原样抽出来，按真实布局在沙箱里跑一遍，
+# 并用 shim 顶替 node（沙箱没有 v24 二进制，只要能把 pnpm.cjs 跑起来就够）。
+WRAPCHK="$ROOT/wrapcheck"
+mkdir -p "$WRAPCHK/runtime/node/bin" "$WRAPCHK/runtime/pnpm/node_modules/pnpm/bin"
+printf 'console.log("9.9.9-wrapcheck")\n' >"$WRAPCHK/runtime/pnpm/node_modules/pnpm/bin/pnpm.cjs"
+printf '#!/bin/sh\nexec node "$@"\n' >"$WRAPCHK/runtime/node/bin/node"
+chmod +x "$WRAPCHK/runtime/node/bin/node"
+if command -v awk >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
+  awk '/cat >app\/runtime\/node\/bin\/pnpm <<.WRAP.$/{f=1;next} /^WRAP$/{f=0} f' \
+    "$HERE/build.sh" >"$WRAPCHK/runtime/node/bin/pnpm"
+  chmod +x "$WRAPCHK/runtime/node/bin/pnpm"
+  # 抽空了就等于没测 —— awk 的模式对不上时会安静地输出空文件，然后「通过」
+  check "从 build.sh 抽到了 wrapper 模板" "yes" \
+    "$([ -s "$WRAPCHK/runtime/node/bin/pnpm" ] && echo yes || echo no)"
+  # 故意换到 $ROOT 调用：证明它找的是自己旁边的文件，而不是 cwd 里的东西
+  check "wrapper 能找到 pnpm.cjs（换 cwd 调用）" "9.9.9-wrapcheck" \
+    "$(cd "$ROOT" && "$WRAPCHK/runtime/node/bin/pnpm" 2>&1)"
+else
+  SKIP=$((SKIP + 2))
+  printf '  \033[33mSKIP\033[0m  wrapper 模板提取与路径解析（缺 awk 或 node）\n'
+fi
 
 say "工作目录：$ROOT"
 

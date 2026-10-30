@@ -726,3 +726,31 @@ spawn pnpm ENOENT
 
 **没验的**：真机装 0.6.9 后 pnpm 能否真的 `add` 成功（store、registry、磁盘都在 NAS 上）。
 判据写在 ISSUES P2 的 F28 那行。
+
+### 26.1　NAS 第一次 full 构建：自检抓出 wrapper 少写一级
+
+```console
+安装 pnpm@10.34.9 ...
+ERROR: pnpm wrapper 无法运行：Error: Cannot find module
+'/root/dsh-fnos/fpk/app/runtime/node/pnpm/node_modules/pnpm/bin/pnpm.cjs'
+```
+
+`$here` 已经是 `runtime/node/bin`，我写成 `../pnpm`（落到 `runtime/node/pnpm`），应为
+`../../pnpm`。**值得记的不是这个算术，而是它为什么没在本地暴露**：本地自测里的「假 pnpm」
+只 `printf` 一个版本号，从不碰 `pnpm.cjs`；`build.sh` 里那条 `pnpm --version` 是第一次
+真的执行这个 wrapper 的地方 —— 也就是说，唯一的守门人来自我 20 分钟前刚写的自检。
+
+三处加固：
+
+1. wrapper 自带守卫：`pnpm.cjs` 不存在就输出完整路径 + `exit 127`，而不是让 node 抛
+   `MODULE_NOT_FOUND` 的栈（那条栈的第一行看上去像 dsh 的 bug，不像打包问题）。
+2. `build.sh` 的自检改成 `cd /` 再调用：在 `fpk/` 里调用时相对路径恰好也能解析对，
+   只有换 cwd 才能证明它找的是自己旁边的文件。
+3. `selftest.sh` 新增两条断言：把 build.sh 的 heredoc 原样抽成模板（并断言「抽到了」，
+   因为 awk 模式对不上时会安静输出空文件然后「通过」），按 `runtime/node/bin` +
+   `runtime/pnpm` 的真实布局在沙箱跑一遍，用 shim 顶替 node。
+
+**反向验证**：把 `../../pnpm` 改回 `../pnpm` 再跑自测 → `通过 54 / 跳过 26 / 失败 1`，
+失败信息直接打印出错的绝对路径；改回后 `55 / 26 / 0`。这一步不能省 —— 一条从没红过的
+断言，和没有断言是一回事（F24 同类问题）。
+
