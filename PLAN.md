@@ -362,28 +362,35 @@ error="10237:fork/exec /tmp/appcenter.pack./cmd/install_init: permission denied"
 - 原生件核对：`node-pty`、`@vscode/ripgrep`、`@deepseek-ai/node-addon-system` 必须是对应架构的 Linux 产物。
 - 体积治理见 §6.1（这是 v1 的主要工作量）。
 
-### 3.2 运行时版本钉定（2026-10-27 核查）
+### 3.2 运行时版本钉定（2026-11-01 复核）
 
 dsh 的 npm dist-tags 与 GitHub 发布**不同步**，不写版本号直接装会拿到旧版：
 
 | 来源 | 版本 | 时间 |
 |---|---|---|
-| npm `latest` | `0.2.1-rc.2` | 10-17 |
-| npm `next` | `0.2.1-rc.4` | 10-26 |
-| GitHub 最新 release | `v0.2.1-rc.3` | 10-23 |
+| npm `latest` / `next` | `0.2.1-rc.5` | 10-29 |
+| npm `alpha` | `0.2.2-alpha.2` | 10-28 |
+| GitHub 最新 release | `v0.2.1-rc.5` | 10-30 |
 | 官方桌面版 | `0.2.1-rc.3` | — |
 
-**结论：钉 `0.2.1-rc.3`。** 依据：
+**结论：钉 `0.2.1-rc.5`（0.7.1 起）。** 依据：
 
-- `latest` 落后两个 RC，`npm i @deepseek-ai/dsh` 会装到 rc.2 —— 所以构建脚本必须显式写版本，不允许 `@latest` 或 `^`。
-- rc.4 只存在于 npm，**没有对应的 GitHub tag/release**；抽样比对 dsh 主包、`dsh-web-app`、
-  `dsh-host-webserver`、`dsh-cmdline`、`dsh-base` 五个包，rc.3 与 rc.4 的**文件内容逐字节相同**，
-  只有 `package.json` 里的版本号不同 —— 判定为一次无变更的重发，没有升级价值，来源也不可追溯。
-- rc.3 与官方桌面版一致，出问题能对照官方构建。
+- 必须显式写版本，不允许 `@latest` 或 `^`：`latest` 长期落后于仓库，最新一次核查时
+  `latest` 还停在 rc.2，直接装会拿到旧版。
+- rc.4 只存在于 npm 早期快照，**没有对应的 GitHub tag/release**；抽样比对 dsh 主包、
+  `dsh-web-app`、`dsh-host-webserver`、`dsh-cmdline`、`dsh-base` 五个包，rc.3 与 rc.4 的
+  **文件内容逐字节相同**，只有 `package.json` 里的版本号不同 —— 判定为一次无变更的重发，跳过。
+- rc.5 有真实改动：**对话里思考内容的展示优化**（纯前端，用户可见）；依赖集与 rc.3
+  **完全一致**（86 个包，仅版本号从 rc.3 → rc.5），没有新增原生件、没有新引擎要求，
+  所以「换版本」这件事对 fpk 的体积与架构假设没有影响。
+- 再往前的 `0.2.2-alpha.*` 线在改插件体验（富文本详情、第三方插件包更新、热更新失败回滚），
+  与我们正在修的 F28/F29 插件链同域，等它转 rc 后再跟。
 
-`build.sh` 里 `DSH_VERSION` 默认值即 `0.2.1-rc.3`，安装后**回读实际版本**校验（npm 的
-resolved 版本与请求不一致时直接失败，避免打出一个"看起来是 rc.3 实际是别的"的包）。
-未来升级：官方发新 release → 改这一处默认值 → 重打包，不做自动跟随。
+`build.sh` 里 `DSH_VERSION` 默认值即 `0.2.1-rc.5`，安装后**回读实际版本**校验（npm 的
+resolved 版本与请求不一致时直接失败，避免打出一个"看起来是 rc.5 实际是别的"的包）。
+未来升级：官方发新 release → 改这一处默认值 → 重打包，不做自动跟随。升级时先核对两件事：
+**依赖集有没有新增原生件**、**`cordis.patch.yml` 那套插件接口有没有变**（后者改了我们那份
+DDG 搜索插件要跟着改）。
 
 ---
 
@@ -884,9 +891,9 @@ upgrade_init（解包前）→ 解包新 app/ 覆盖 target → upgrade_callback
 ```
 /vol1/dsh/
 ├── releases/
-│   ├── v0.2.1-rc.3/     ← 正在服务
+│   ├── v0.2.1-rc.5/     ← 正在服务
 │   └── v0.2.2-rc.1/     ← 新构建完成待切换
-├── current -> releases/v0.2.1-rc.3   （符号链接）
+├── current -> releases/v0.2.1-rc.5   （符号链接）
 └── shared/              ← $DSH_HOME、logs、settings
 ```
 

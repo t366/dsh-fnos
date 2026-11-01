@@ -49,7 +49,7 @@
 | F26 | Web 端附件上传全灭：卷目录 000 撞上 dsh 的 fsync-to-root | 缺陷（权限） | ✅ | `chown dsh:dsh` + `chmod o+rx /vol1 /vol1/@appshare`；见正文 |
 | F27 | agent 会话环境三连坑：工作区不可写 / 工具 schema 误导 / 沙箱只读 | 缺陷（环境） | ⚠️ | 坑 1 已结案（走 dsh 授权通道）；坑 2/3 属工具与平台 |
 | F28 | 「添加插件」一律失败：运行时只有 node 二进制，没有 pnpm | 缺陷（打包） | ⚠️ | 0.6.9：`build.sh` 装 pnpm 10.34.9 + `cmd/main` 前置 PATH；真机 0.6.9 已消除 `spawn pnpm ENOENT`，但下一环仍报错 → 见 F29 |
-| F29 | 插件信息仍读不出来：pnpm 把 `view` 转发给系统 npm 10.9.3，和自带 node 24 不兼容 | 缺陷（打包/依赖链） | ⚠️ | 0.7.0：运行时成套带 npm 11.21.1（`runtime/npm` + `node/bin/npm` wrapper），打包时把 `pnpm view` 真跑一遍当门禁；**待装 0.7.0 验证** |
+| F29 | 插件信息仍读不出来：pnpm 把 `view` 转发给系统 npm 10.9.3，和自带 node 24 不兼容 | 缺陷（打包/依赖链） | ⚠️ | 0.7.0：运行时成套带 npm 11.21.1（`runtime/npm` + `node/bin/npm` wrapper），打包时把 `pnpm view` 真跑一遍当门禁；**待装 0.7.1 验证**（0.7.1 同时把 dsh 升到 `0.2.1-rc.5`） |
 | T1 | 0.5.0 打包与真机安装 | — | ✅ | `probe/05` 33 PASS / 1 WARN / 0 FAIL |
 | T2 | cookie 跨重启 / 令牌是否一次性 | — | ✅ | `probe/07` 10 PASS：令牌可复用、cookie 跨重启存活 |
 | T3 | 端口写死 3080，不可配置 | — | 📋 | 改端口=卸载重装 |
@@ -65,8 +65,8 @@
 
 ## 当前剩余问题（按优先级）
 
-> 截至 2026-11-01 16:45。真机已装 **`0.6.9`**（F28 的 pnpm 已生效，但插件仍失败 → **F29**）；
-> **`0.7.0`（F29 自带 npm）待打包安装**。
+> 截至 2026-11-01 17:05。真机已装 **`0.6.9`**（F28 的 pnpm 已生效，但插件仍失败 → **F29**）；
+> **`0.7.1`（F29 自带 npm + dsh 升到 `0.2.1-rc.5`）待打包安装**。
 > 只列**还没关闭**的项；已修缺陷见第二节，平台限制见第一节。
 >
 > **已关闭（最近）**：P0 实例归属、F16 的 root 文件残留、T1 / T2（0.5.0 装机验收）、
@@ -93,7 +93,8 @@
 | 项 | 判据 | 前置 |
 |---|---|---|
 | **F28 插件安装（pnpm）** | 装 0.6.9 后 `grep 'start: pnpm=' /var/apps/dsh/var/info.log` 出现 `version=10.34.9（已前置到 PATH）`；Web 界面「添加插件」不再报 `spawn pnpm ENOENT` | ✅ 0.6.9 真机已验证（ENOENT 消失） |
-| **F29 插件安装（npm）** | 装 0.7.0 后 `grep 'start: npm=' /var/apps/dsh/var/info.log` 出现 `version=11.21.1`；Web 界面「添加插件」能读到版本号并开始下载；`grep -c 'minizlib' /vol1/@appshare/dsh/workspace/.dsh-home/.npm/_logs/*.log` 不再新增 | 装 0.7.0 |
+| **F29 插件安装（npm）** | 装 0.7.1 后 `grep 'start: npm=' /var/apps/dsh/var/info.log` 出现 `version=11.21.1`；Web 界面「添加插件」能读到版本号并开始下载；`grep -c 'minizlib' /vol1/@appshare/dsh/workspace/.dsh-home/.npm/_logs/*.log` 不再新增 | 装 0.7.1 |
+| **dsh 升到 rc.5** | `grep 'dsh 版本校验通过' ~/build-*.log` 是 `0.2.1-rc.5`；装完首屏、旧会话、工作区都正常，插件列表能打开；顺带复核 F24 的「可访问目录」入口是否还在（dsh 前端改版可能动到路径） | 装 0.7.1 |
 | **F22 默认工作区** | 工作区下拉里出现「默认工作区」且处于勾选态；`grep XDG_DOCUMENTS_DIR /vol1/@appshare/dsh/workspace/.dsh-home/.config/user-dirs.dirs` 指向共享目录；原 `Project` 与旧会话仍在 | 0.6.7 已装，等一句确认 |
 | ~~F23 访问权限~~ ✅ | 真机已验证：「访问权限」页出现，`存储空间1/T366的文件/Project` 加成「读写」成功 | 已完成 |
 | **F24 授权目录导航** | 装 0.6.8 后「选择工作区目录」首屏出现「可访问目录」，进去能点到刚授权的文件夹，选中后能建工作区；`ls /vol1/@appshare/dsh/workspace/.dsh-home/可访问目录` 有对应软链 | 装 0.6.8 |

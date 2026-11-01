@@ -83,13 +83,16 @@ bash build.sh full 2>&1 | tee ~/build-$(grep -E '^version' manifest | cut -d'"' 
 
 ```
 跳过 0 / 失败 0
-dsh 版本校验通过：0.2.1-rc.3
-pnpm 自检通过：10.34.9（app/runtime/pnpm 19M）
-npm 自检通过：11.21.1（app/runtime/npm 17M）
+dsh 版本校验通过：0.2.1-rc.5
+pnpm 自检通过：10.34.9（app/runtime/pnpm 23M）
+npm 自检通过：11.21.1（app/runtime/npm 20M）
 端到端自检通过：pnpm view lodash version -> 4.18.1
 app/ 文件数：6.6 万左右
-产物：./dsh.fpk（约 208M，版本 0.7.0）
+产物：./dsh.fpk（约 208M，版本 0.7.1）
 ```
+
+- **`dsh 版本校验通过：0.2.1-rc.5` 必须是 rc.5**：这行是回读装进来的 `package.json` 得到的，
+  不是打印请求值。若显示 rc.3，说明跑的还是改之前那份 `build.sh`（或 `DSH_VERSION` 被环境覆盖）。
 
 - Linux 上「跳过」必须是 **0**。开发机（Windows）上的 26 项跳过是权限位、`/proc`、
   进程组这些只能在真机判定的断言，这里会真正执行。
@@ -426,7 +429,7 @@ grep -E 'start: (pnpm|npm)=' /var/apps/dsh/var/info.log | tail -n 4
 
 只有 `WARN: 缺少 runtime/node/bin/pnpm` → 装的还是 0.6.8 或更早；
 只差 npm 那条（有 `WARN: 缺少 runtime/node/bin/npm`）→ 装的是 0.6.9，
-插件仍会报 `npm error Class extends value undefined`（F29）。两种情况都是「装 0.7.0 的包」。
+插件仍会报 `npm error Class extends value undefined`（F29）。两种情况都是「装 0.7.1 的包」。
 
 **再确认两个 wrapper 真能跑**（不必等界面报错）：
 
@@ -465,14 +468,14 @@ grep -n '"dependencies"' -A8 /vol1/@appshare/dsh/workspace/.dsh-home/profiles/*/
 
 | 报错 | 含义 | 动作 |
 |---|---|---|
-| `spawn pnpm ENOENT` | 包里没有 pnpm（0.6.8 及更早） | 装 0.7.0 |
-| `npm error Class extends value undefined` + `.npm/_logs/…debug-0.log` | pnpm 转发给系统 npm 10.9.3，与自带 node 24 不兼容（F29） | 装 0.7.0；应急见下方 |
+| `spawn pnpm ENOENT` | 包里没有 pnpm（0.6.8 及更早） | 装 0.7.1 |
+| `npm error Class extends value undefined` + `.npm/_logs/…debug-0.log` | pnpm 转发给系统 npm 10.9.3，与自带 node 24 不兼容（F29） | 装 0.7.1；应急见下方 |
 | `ERR_PNPM_FETCH_404` / `404` | 包名或版本不存在 | 核对 npm 上的名字（`curl -s https://registry.npmmirror.com/<名字> \| head -c 200`） |
 | `ETIMEDOUT` / `ENETUNREACH` | NAS 出不了外网 | 换 registry 或给 NAS 配代理 |
 | `EACCES` / `EPERM` | 数据目录写不进去 | 见 5.5；插件目录必须在 `.dsh-home` 下 |
 | `unreviewed build scripts` / `allowBuilds` | pnpm 10 默认禁止依赖跑 install 脚本 | 按提示把包名加进 `<profile>/pnpm-workspace.yaml` 的 `allowBuilds`，再重试 |
 
-**F29 的应急补丁**（不想等 0.7.0 打包，NAS 上以 root 做，30 秒）：
+**F29 的应急补丁**（不想等 0.7.1 打包，NAS 上以 root 做，30 秒）：
 
 ```bash
 R=/var/apps/dsh/target/runtime

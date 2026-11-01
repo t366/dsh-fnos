@@ -3,7 +3,7 @@
 # 在飞牛 NAS 上打包 fpk。
 #
 #   bash build.sh              # 骨架包（不含 dsh 运行时，约 100KB）
-#   bash build.sh full         # 完整包（捆绑 node + dsh；包内 977MB、fpk 约 199MB）
+#   bash build.sh full         # 完整包（捆绑 node + dsh + pnpm + npm；包内约 1GB、fpk 约 208MB）
 #
 # 默认行为（都是为了少记命令）：
 #   · 先跑 selftest.sh，失败就中止          → DSH_SKIP_SELFTEST=1 跳过
@@ -21,7 +21,12 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE"
 
 MODE="${1:-skeleton}"
-DSH_VERSION="${DSH_VERSION:-0.2.1-rc.3}"
+# 钉版本，永不写 @latest：dsh 的 npm dist-tags 与 GitHub 发布不同步
+# （latest 曾落后三个 RC），不写版本号装到的是旧版，见 PLAN §3.2。
+# 0.7.1 起跟到 rc.5：rc.4 是「无变更重发」（内容与 rc.3 逐字节相同），
+# rc.5 的改动是对话里思考内容的展示优化（纯前端）。rc.3→rc.5 依赖集完全一致
+# （86 个包，只有版本号变），没有新增原生件或新引擎要求。
+DSH_VERSION="${DSH_VERSION:-0.2.1-rc.5}"
 # dsh 自己不实现包管理：插件安装/查询全部转发给 pnpm（`pnpm view`、`pnpm add`），
 # 而且只认 PATH 上的裸命令 "pnpm" → 不带 pnpm 时 Web 界面报 `spawn pnpm ENOENT`。
 # 钉 10.x 的理由：dsh 的引导文案让用户改 pnpm-workspace.yaml 里的 allowBuilds，

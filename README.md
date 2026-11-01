@@ -11,12 +11,12 @@
 
 | 项 | 值 |
 |---|---|
-| 包版本 | **0.7.0**（源码就绪，**待 NAS 上打包与真机验证**） |
+| 包版本 | **0.7.1**（源码就绪，**待 NAS 上打包与真机验证**；相对 0.7.0 的实质改动只有 dsh 从 rc.3 升到 rc.5） |
 | 最近一次完整真机验收 | **0.6.7**：图标、启停入口、「访问权限」页均已确认；0.5.0 时为 `probe/05` **33 PASS / 1 WARN / 0 FAIL**、`probe/07` **10 PASS / 0 FAIL**。待验项见 [ISSUES 的 P1/P2](docs/ISSUES.md) |
 | 数据落点 | 共享目录 `dsh/workspace/.dsh-home`（**跨卸载存活**，已实测） |
 | 默认工作区 | `dsh/workspace/deepseek-harness/default-workspace`（0.6.6 起自动建；原理见 [ISSUES F22](docs/ISSUES.md)） |
 | 任意文件夹当工作区 | 应用设置 →「访问权限」授权目录（读写）→ dsh 里「+ 添加工作区」→ 点首屏的 **「可访问目录」** 选中（0.6.8 起；见 [ISSUES F23](docs/ISSUES.md) / [F24](docs/ISSUES.md)） |
-| 运行时 | 自带 Node 24（`v24.22.1`）+ `@deepseek-ai/dsh@0.2.1-rc.3`（钉版理由见 [PLAN §3.2](PLAN.md)） |
+| 运行时 | 自带 Node 24（`v24.22.1`）+ `@deepseek-ai/dsh@0.2.1-rc.5`（0.7.1 起；钉版理由与升级记录见 [PLAN §3.2](PLAN.md)） |
 | 插件 | 0.7.0 起运行时**成套自带 pnpm 10.34.9 + npm 11.21.1**（`runtime/pnpm`、`runtime/npm`，各配 `runtime/node/bin/` 下的 wrapper）。dsh 装插件只 spawn 裸命令 `pnpm`（缺了报 `spawn pnpm ENOENT`，[F28](docs/ISSUES.md)），而 pnpm 的 `view`/`add` 又会把请求转发给裸命令 `npm`（缺了会落到系统那份 10.9.3，被自带 node 24 跑起来就崩，[F29](docs/ISSUES.md)）。插件装进 `.dsh-home` 下的 profile 子目录，**需要能访问 npm registry**（默认 npmmirror），装完重启应用一次才加载 |
 | 尺寸 | 包内 `app/` **约 1014MB / 6.6 万个文件**（0.7.0 的 pnpm+npm 约 +37MB）；fnpack 压出的 **`dsh.fpk` 约 208MB**（0.6.8 实测 199MB）；装完实测 **957M / 63056 个文件**（0.6.8，`du -sh /vol1/@appcenter/dsh`，不含软链的 `/var/apps/dsh`） |
 | 已知问题 | 见 [docs/ISSUES.md](docs/ISSUES.md) |
