@@ -34,15 +34,15 @@ echo "manifest=$M"; grep -E '^[[:space:]]*version' "$M"
 
 | 输出 | 怎么做 |
 |---|---|
-| `0.5.0` | 直接进第 1 步：仓库里的 `manifest` 已经是 `0.6.0`，比它高一级，能正常覆盖 |
-| `0.6.0`（与 `fpk/manifest` 相同） | 先把 `fpk/manifest` 的 `version` 提到 `0.6.1` 再打包，否则 `build.sh` 会直接 `die`（F12 版本守卫） |
-| 其他（`0.2.0` / `0.4.0` …） | 直接进第 1 步 |
+| 比 `fpk/manifest` 里的版本**低** | 直接进第 1 步，能正常覆盖升级 |
+| 与 `fpk/manifest` **相同** | 先把 `fpk/manifest` 的 `version` 提一级再打包，否则 `build.sh` 会直接 `die`（F12 版本守卫） |
+| 其他（更老的 `0.2.0` / `0.4.0` …） | 直接进第 1 步 |
 | 两处都没有（`manifest=` 为空） | 平台侧状态异常，先跑 `appcenter-cli status dsh` 与 `ls -ld /var/apps /vol1/@appcenter/dsh`，把输出留下再继续 |
 
 顺手确认一下仓库里的版本（第 1 步 `git pull` 之后再跑）：
 
 ```bash
-grep -E '^version' ~/dsh-fnos/fpk/manifest    # 期望 version="0.6.0"
+grep -E '^version' ~/dsh-fnos/fpk/manifest    # 应与 README「包版本」一致（本文写于 0.7.3）
 ```
 
 > 为什么必须管：`appcenter-cli install-fpk` 对已装应用只回一句 `is installed`，
@@ -62,11 +62,29 @@ git log --oneline -1
 判据以工作区实际内容为准，不用记 commit 号：
 
 ```bash
-grep '^version' fpk/manifest                      # 必须是 0.6.0
+grep '^version' fpk/manifest                      # 与 README「包版本」一致（本文写于 0.7.3）
 grep -c '@appshare' fpk/build.sh                  # 必须 > 0（F20 的落点修复在里面）
 ```
 
 不是这样就先别打包——`build.sh` 打的是工作区里的代码，不是远端。
+
+> **`git pull` 报 `local changes … would be overwritten`？**
+> 多半不是有人改了代码，而是上一次打包干的：`build.sh` 里的 `chmod +x cmd/*` 把
+> `cmd/lib-home`（以及 `cmd/*.mjs`）加成可执行，而仓库里记的是 `644` —— git 把 mode 位
+> 也算改动，于是「本地有改动 + 远端也改了这个文件」就被拒。先确认：
+>
+> ```bash
+> git diff -- fpk/cmd/lib-home     # 只有 old mode / new mode、没有内容 hunk，就是它
+> ```
+>
+> 内容没变就直接丢掉 mode 变化再拉；真手改过就先存一份 patch。
+>
+> ```bash
+> git checkout -- fpk/cmd/lib-home fpk/cmd/*.mjs
+> git pull
+> ```
+>
+> 0.7.3 起 `build.sh` 对这两个文件显式 `chmod a-x`，不会再把工作区弄脏。
 
 ---
 

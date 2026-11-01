@@ -61,11 +61,17 @@ done
 
 chmod +x cmd/* 2>/dev/null || true
 
+# 但 cmd/lib-home 是被 source 的库、*.mjs 是 node 调用的，两个都不需要执行位。
+# 给它们 +x 会让 git 看到 mode 变化（100644 → 100755）：工作区变脏，
+# 下次 `git pull` 遇到同名文件的新提交就会被「本地改动会被覆盖」挡住（2026-11-01 实际发生）。
+chmod a-x cmd/lib-home 2>/dev/null || true
+chmod a-x cmd/*.mjs 2>/dev/null || true
+
 # 目录必须可遍历（有 +x）。fnOS 装完后 config/ wizard/ 的 mode 会变成 644，
 # 见 probe/05-verify-fpk.sh 第 5 节的告警；打包前先钉死，排除「源目录本来就没 +x」
 # 这一种可能。只处理包内的少量目录，不碰 node_modules。
 find . -maxdepth 3 -type d -not -path './app/runtime/app/*' -exec chmod 755 {} + 2>/dev/null || true
-say "cmd/ 已 chmod +x，目录已 chmod 755，自写文本已清 CRLF（node_modules 不动）"
+say "cmd/ 已 chmod +x（lib-home 与 *.mjs 保持 644），目录已 chmod 755，自写文本已清 CRLF（node_modules 不动）"
 
 # ---------------------------------------------------------------- 1.2 自测
 # 把 selftest 串进打包流程：用户在 NAS 上只需要记一条 `bash build.sh full`，

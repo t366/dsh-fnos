@@ -56,6 +56,7 @@
 | F35 | 升级快照落在 `@appdata/dsh/backups`，而卸载会清空该目录内容（P6）：真要回滚就得卸载重装，快照先被卸载删掉 | 缺陷（恢复路径） | ⚠️ | 0.7.3：`lib-home` 加 `dsh_backup_dir_for()`，落点改 `@appshare/dsh/backups`，并搬迁旧快照；**待装机验证** |
 | F33 | 启动日志明文写入完整登录令牌（`"token":"…"` 未打码），而 info.log 正是外发排障的那份 | 缺陷（安全） | ✅ | 0.7.2：`start: state=` 两条正则都打码；2026-11-01 18:33 之后的行实测 **0 命中**；`dsh web:` 那行控制不了，改由 RUNBOOK 强制脱敏 |
 | F34 | 手工启动算出第二个 var 目录 → 两套 pidfile → 3080 被占 2h20m | 缺陷（路径） | ✅ | 0.7.2：`PKGVAR` 缺省值按 `@appcenter → @appdata` 归一 |
+| F36 | `build.sh` 的 `chmod +x cmd/*` 会把 `cmd/lib-home`、`cmd/*.mjs` 加成 755，仓库记的是 644 → 打过包的机器 `git pull` 被「本地改动会被覆盖」挡住 | 缺陷（构建） | ✅ | 0.7.3：`chmod +x cmd/*` 之后对这两类显式 `chmod a-x`；详见 DEVLOG 31.5 |
 | T1 | 0.5.0 打包与真机安装 | — | ✅ | `probe/05` 33 PASS / 1 WARN / 0 FAIL |
 | T2 | cookie 跨重启 / 令牌是否一次性 | — | ✅ | `probe/07` 10 PASS：令牌可复用、cookie 跨重启存活 |
 | T3 | 端口写死 3080，不可配置 | — | 📋 | 改端口=卸载重装 |

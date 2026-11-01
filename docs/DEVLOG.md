@@ -1133,7 +1133,7 @@ store」立刻不一致——我们亲手制造出正在修的那个错误。
 
 | 位置 | 改动 |
 |---|---|
-| `fpk/cmd/lib-home` | 新增 `dsh_appshare_root()`、`dsh_backup_dir_for()`、`dsh_store_dir_for()` |
+| `fpk/cmd/lib-home` | 新增 `dsh_appshare_root()`、`dsh_backup_dir_for()`（store 的处理放在 `main`，见 31.3） |
 | `fpk/cmd/upgrade_init` | 快照改落 `@appshare/<app>/backups`；打印 `backup-dir:`；搬迁 `@appdata` 旧快照 |
 | `fpk/cmd/main` | 新增 `ensure_pnpm_store_dir()`，`start` 里在拉起 dsh 前调用 |
 | `fpk/selftest.sh` | 断言启动日志里有 `pnpm-store:` 决策（60 通过 / 26 跳过 / 0 失败） |
@@ -1147,3 +1147,27 @@ store」立刻不一致——我们亲手制造出正在修的那个错误。
   再跑一次沿用不追加、用户自配不覆盖、`storeDir` 本身不带版本时按原样写；
 - `upgrade_init` 搬迁：三份旧快照（其中一份在新位置已存在）→ 两份迁移、一份去重删除、
   旧目录清空后移除，随后轮转仍只留 2 份。
+
+### 31.5　打包脚本自己制造的一次 `git pull` 失败
+
+0.7.3 第一次在 NAS 上拉，被 git 挡住：
+
+```console
+error: Your local changes to the following files would be overwritten by merge:
+        fpk/cmd/lib-home
+```
+
+没人手工改过代码，是 `build.sh` 第 62 行的 `chmod +x cmd/*` 干的。`lib-home` 是被
+`source` 的库，仓库里记 `100644`；无差别 +x 之后，Linux 工作区里就成了 `100755`。
+git 把 mode 位也算改动，于是「本地改了 + 远端也改了同一文件」→ 拒绝合并。
+`cmd/ensure-default-workspace.mjs` 同样中招，只是因为这次远端没动它，没报错而已。
+**每次打包都会重新制造一次**，也就意味着「打过包的机器再也 pull 不了改同一文件的提交」。
+
+修法没有选「把 lib-home 也改成 755 算了」——那只是把错的状态写进仓库，`.mjs` 还是脏的。
+改成精确处理：保留 `chmod +x cmd/*`（新增脚本不会漏执行位），紧接着对
+`cmd/lib-home` 与 `cmd/*.mjs` 显式 `chmod a-x`。探针第 3 节只要求 9 个被平台调用的脚本有
+`+x`，这两个本来就不在那张清单里，不会误报。
+
+排查动作值得记住：`git diff -- <文件>` 只出 `old mode / new mode`、没有内容 hunk，
+就是纯 mode 冲突，`git checkout -- <文件>` 丢掉即可（内容与 HEAD 一致，不丢代码）；
+真有手改就先 `git diff > ~/local.patch` 留一份再丢弃。
