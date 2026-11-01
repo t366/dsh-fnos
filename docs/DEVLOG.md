@@ -1171,3 +1171,54 @@ git 把 mode 位也算改动，于是「本地改了 + 远端也改了同一文�
 排查动作值得记住：`git diff -- <文件>` 只出 `old mode / new mode`、没有内容 hunk，
 就是纯 mode 冲突，`git checkout -- <文件>` 丢掉即可（内容与 HEAD 一致，不丢代码）；
 真有手改就先 `git diff > ~/local.patch` 留一份再丢弃。
+
+## 阶段 32（2026-11-01 19:18）　0.7.3 装机验收：快照换了抽屉，store 没动用户配置
+
+### 32.1　三行日志，两条结论
+
+```console
+2026-11-01 19:17:52 [569471] upgrade_init: backup-dir: /vol1/@appshare/dsh/backups（数据目录 /vol1/@appshare/dsh/workspace/.dsh-home）
+2026-11-01 19:18:15 [569471] upgrade_init: backup: ok /vol1/@appshare/dsh/backups/pre-upgrade-0.7.2-to-0.7.3-20261101-191752.tar.gz (486M)
+2026-11-01 19:18:49 [570094] pnpm-store: 沿用已有配置 /vol1/@appshare/dsh/.pnpm-store
+```
+
+F35 与 F30 一起验完。真正值得记的是目录列表：
+
+```console
+$ ls -lh /vol1/@appshare/dsh/backups/
+-rwx------ 1 dsh dsh 486M Nov  1 18:33 pre-upgrade-0.7.1-to-0.7.2-20261101-183329.tar.gz
+-rwx------ 1 dsh dsh 486M Nov  1 19:18 pre-upgrade-0.7.2-to-0.7.3-20261101-191752.tar.gz
+```
+
+### 32.2　mtime 是最省事的那个证据
+
+两个文件一样大、一样权限，怎么证明旧的那份是「搬过来」而不是「重新打一遍」？
+看 mtime：18:33 那份**时间没变**。tar 重打包会把 mtime 更新成打包时刻，
+同卷 `mv` 只是改目录项、inode 的时间戳原样带过去。所以这一行列表同时证明了三件事：
+迁移走了 `mv`、486M 没有被真搬一遍（同卷改名）、以及 0.7.3 的迁移代码确实跑了。
+
+如果只看 `backup: ok` 那一行，是看不出这些的——**验收时优先找那种「一个数字就能排除
+另一种解释」的证据**，比多读十行日志有用。
+
+### 32.3　证据在，grep 看不到
+
+验收时我给的命令是：
+
+```bash
+grep -E 'upgrade_init: (backup-dir|迁移旧快照|backup: ok)' info.log
+```
+
+结果只出两行，迁移那行没出现，一度像是「文件怎么会自己跑到新目录」。实际日志是
+`upgrade_init: backup: 迁移旧快照 …` —— 前缀是 `backup:`，所以 `迁移旧快照` 前面
+隔着别的字符，括号里的三选一一个都不匹配。
+
+这和 F30 那次误判（看 store 目录并存就断定跨布局冲突）是同一类错误：**先怀疑实现，
+其实是查询写窄了**。以后遇到「日志应该有却没有」，先拿最宽的锚点验一遍
+（`grep 'upgrade_init: backup'`），确认真没有，再去读代码。
+
+### 32.4　顺带
+
+- `@appdata/dsh/backups` 迁移后变空，`rmdir` 顺手删掉；留在那儿也不会再被写入。
+- F30 的「自动写入」分支仍未被真机触发（本机 rc 是 0.7.2 时手工写的，走的是分支 1
+  「沿用不覆盖」）。这不影响结案：**分支 1 恰好证明了它不会覆盖用户配置**，
+  而分支 2 的路径有本地用例。

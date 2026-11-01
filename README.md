@@ -11,7 +11,7 @@
 
 | 项 | 值 |
 |---|---|
-| 包版本 | **0.7.3**（源码就绪，**待 NAS 打包与装机验证**）。相对 0.7.2 只动两处：升级快照改落 `@appshare/dsh/backups`（`@appdata` 会被卸载清空，见 [F35](docs/ISSUES.md)），并自动搬迁旧快照；`main` 启动时按 `profiles/*/node_modules/.modules.yaml` 记录的 `storeDir` 自动对齐 pnpm store，插件安装不再需要手工写配置（[F30](docs/ISSUES.md)）。<br>0.7.2 已在真机装成并验收：快照真会打（486M）、凭据判据不再误报、日志令牌打码实测 0 命中 |
+| 包版本 | **0.7.3**（**已在 NAS 真机装成并验收**）。相对 0.7.2 只动两处：升级快照改落 `@appshare/dsh/backups`（`@appdata` 会被卸载清空，见 [F35](docs/ISSUES.md)），并自动搬迁旧快照；`main` 启动时按 `profiles/*/node_modules/.modules.yaml` 记录的 `storeDir` 自动对齐 pnpm store，插件安装不再需要手工写配置（[F30](docs/ISSUES.md)）。<br>真机 2026-11-01 19:18：新快照 486M 落在新目录、0.7.2 那份旧包同卷 `mv` 过来（mtime 未变）、`pnpm-store: 沿用已有配置` 未覆盖手工配置。<br>0.7.2 的验收一并保留：快照真会打（486M）、凭据判据不再误报、日志令牌打码实测 0 命中 |
 | 最近一次完整真机验收 | **0.6.7**：图标、启停入口、「访问权限」页均已确认；0.5.0 时为 `probe/05` **33 PASS / 1 WARN / 0 FAIL**、`probe/07` **10 PASS / 0 FAIL**。待验项见 [ISSUES 的 P1/P2](docs/ISSUES.md) |
 | 数据落点 | 共享目录 `dsh/workspace/.dsh-home`（**跨卸载存活**，已实测） |
 | 默认工作区 | `dsh/workspace/deepseek-harness/default-workspace`（0.6.6 起自动建；原理见 [ISSUES F22](docs/ISSUES.md)） |
