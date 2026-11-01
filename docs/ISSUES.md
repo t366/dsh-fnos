@@ -95,7 +95,7 @@
 |---|---|---|
 | **F28 插件安装（pnpm）** | 装 0.6.9 后 `grep 'start: pnpm=' /var/apps/dsh/var/info.log` 出现 `version=10.34.9（已前置到 PATH）`；Web 界面「添加插件」不再报 `spawn pnpm ENOENT` | ✅ 0.6.9 真机已验证（ENOENT 消失） |
 | **F29 插件安装（npm）** | 装 0.7.1 后 `grep 'start: npm=' /var/apps/dsh/var/info.log` 出现 `version=11.21.1`；Web 界面「添加插件」能读到版本号并开始下载 | ✅ 0.7.1 真机已验证（读出描述与 `版本 0.9.26`） |
-| **F30 插件安装（store）** | `grep -E 'storeDir\|layoutVersion' …/profiles/web/node_modules/.modules.yaml` 与 `pnpm store path` 指向同一 store；`pnpm add dsh-free-search` 不再报 `ERR_PNPM_UNEXPECTED_STORE` | 先取 `.modules.yaml` 的 `storeDir` |
+| **F30 插件安装（store）** | 以 dsh 身份 `pnpm store path` 打印 `/vol1/@appshare/dsh/.pnpm-store/v10`；界面「添加插件」不再报 `ERR_PNPM_UNEXPECTED_STORE`，能装完并出现在插件列表 | 写 `$DSH_HOME/.config/pnpm/rc` 的 `store-dir` |
 | **dsh 升到 rc.5** | `grep 'dsh 版本校验通过' ~/build-*.log` 是 `0.2.1-rc.5`；装完首屏、旧会话、工作区都正常，插件列表能打开；顺带复核 F24 的「可访问目录」入口是否还在（dsh 前端改版可能动到路径） | 装 0.7.1 |
 | **dsh 升到 rc.5** | `grep 'dsh 版本校验通过' ~/build-*.log` 是 `0.2.1-rc.5`；装完首屏、旧会话、工作区都正常，插件列表能打开；顺带复核 F24 的「可访问目录」入口是否还在（dsh 前端改版可能动到路径） | 装 0.7.1 |
 | **F22 默认工作区** | 工作区下拉里出现「默认工作区」且处于勾选态；`grep XDG_DOCUMENTS_DIR /vol1/@appshare/dsh/workspace/.dsh-home/.config/user-dirs.dirs` 指向共享目录；原 `Project` 与旧会话仍在 | 0.6.7 已装，等一句确认 |
@@ -1184,39 +1184,38 @@ If you want to use the new store location, reinstall your dependencies with "pnp
 **要点**：这不是「装不上包」，是 pnpm 拒绝在**用别的 store 装出来的** `node_modules` 上继续操作。
 pnpm 把依赖以硬链/符号链形式指向 store，换 store 就等于换了一套内容寻址目录，它不敢混用。
 
-**成因（2026-11-01 17:10 实查确认）**：`profiles/web` 那份 `node_modules` 建于 **10-29**，当时运行时里
-**还没有 pnpm**，dsh 的 `spawn("pnpm")` 命中的是系统 `/usr/local/bin/pnpm`（**12.5.1**，9-20 装的原生
-二进制）。0.7.x 起用自带的 **10.34.9**，两者的 store **布局版本不同**，目录并存于同一 HOME 下：
+**成因（2026-11-01 17:17 拿到完整报错后确认）**：两处 store **布局相同**（都是 `v10`），
+差别只是**路径**——旧的那份 `node_modules` 是在 `HOME` 还指向别处时装出来的：
 
 ```console
-$ du -sh /vol1/@appshare/dsh/workspace/.dsh-home/.local/share/pnpm/store/*
-… v10      ← 自带 pnpm 10.34.9
-… v11      ← 系统 pnpm 12.5.1（旧 profile 用的就是这个）
+The dependencies at ".../profiles/web/node_modules" are currently linked from the store at
+  "/vol1/@appshare/dsh/.pnpm-store/v10"                                   ← 旧，10-29 那次安装留下的
+pnpm now wants to use the store at
+  ".../.dsh-home/.local/share/pnpm/store/v10"                             ← 现在 HOME=.dsh-home 算出来的
 ```
 
-`v10` / `v11` 是 pnpm 的**内容寻址布局版本**，不是配置项 —— 所以「把 store-dir 指回去」这种
-省事办法在这里不成立（跨布局不能共用）。锁文件 `lockfileVersion: '9.0'` 也印证是 pnpm 9/10 时代
-的格式由 12 写到同一套约定里，靠锁文件本身看不出差异。
+**一条被截断的报错走过的弯路**（记下来免得下次重犯）：先前只看到 `…/.loc…` 那半行，
+又看到 store 目录下并存 `v10` 与 `v11`，据此推断「跨大版本布局冲突、只能重装」。
+实际那个 `v11` 是系统 pnpm 12.5.1 留下的**无关目录**，与这份 profile 没有关系；真正要读的
+是报错里被截掉的**前一行**。判据只能来自完整错误文本，不能从目录清单反推。
 
-这也解释了为什么错误在 F28/F29 修完才浮现：前两轮根本没走到 `pnpm add`。**只影响这台机器**
-—— 新装的应用由自带 pnpm 创建 profile，store 天生一致，不会遇到。
-
-**判据（只读）**：
+**修法（不需要停应用、不需要重装）**：把 pnpm 的 store 指回旧路径。`store-dir` 是 pnpm
+专有配置，写进 pnpm 自己的全局配置文件（`$HOME/.config/pnpm/rc`），不碰 `.npmrc`，
+避免 npm 也去解析一个它不认识的键：
 
 ```bash
-# busybox 的 grep 不认 \s，别用 '^\s*storeDir:' —— 会静默返回空
-grep -a storeDir /vol1/@appshare/dsh/workspace/.dsh-home/profiles/web/node_modules/.modules.yaml
-du -sh /vol1/@appshare/dsh/workspace/.dsh-home/.local/share/pnpm/store/*
+H=/vol1/@appshare/dsh/workspace/.dsh-home
+mkdir -p "$H/.config/pnpm"
+printf 'store-dir=%s\n' /vol1/@appshare/dsh/.pnpm-store > "$H/.config/pnpm/rc"
+chown -R dsh:dsh "$H/.config/pnpm"
+# 验证（以 dsh 身份）：必须打印 /vol1/@appshare/dsh/.pnpm-store/v10
+su -s /bin/sh dsh -c "cd / && HOME='$H' PATH=/var/apps/dsh/target/runtime/node/bin:\$PATH pnpm store path"
 ```
 
-**修法（A，唯一可行）**：以 **dsh 身份**（`HOME=$DSH_HOME`）用自带 pnpm 在 profile 里重装一遍。
-要点三条，缺一条就会出新问题：
+**备选（只有当 dsh 对旧 store 无写权限时）**：那才需要迁移 —— 把 `node_modules` 改名挪开，
+以 dsh 身份在新 store 下 `pnpm install` 一次。要点三条：先挪开（否则 pnpm 仍报同一错误）、
+必须切到 dsh 用户（否则属主变 root，F26 老坑）、装完核对 `.modules.yaml` 的 `storeDir`。
 
-1. **先把 `node_modules` 改名挪开**（同卷 rename，瞬时且可逆）：pnpm 见到旧布局会**再报同一条错**，
-   光 `pnpm install` 不解决问题。
-2. **必须切到 dsh 用户**跑，否则新文件属主是 root，dsh 读不了（F26 的老坑）。
-3. 装完核对 `node_modules/.modules.yaml` 的 `storeDir` 指向 **v10**，并保留 `node_modules.legacy-*`
-   与 `profiles/web.bak-*` 直到插件能装成功。
 
 ---
 

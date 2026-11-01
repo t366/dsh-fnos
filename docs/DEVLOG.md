@@ -904,3 +904,31 @@ rc.3 的 `registerSearchProvider` 写的、**从未真机验证过**（一直 WI
 
 判据记在 ISSUES P2 的「dsh 升到 rc.5」那行：版本校验行、首屏与旧会话、以及 F24 的
 「可访问目录」入口是否还在（前端改版可能动到路径）。
+
+### 28.4　一次误判：从目录清单反推结论，比不推更糟
+
+F30 的报错在界面上只露出一行半，`pnpm now wants to use the store at ".../.loc…"` 后面被截掉了。
+我当时手上另一条线索是：
+
+```console
+$ du -sh .../.dsh-home/.local/share/pnpm/store/*
+… v10      ← 自带 pnpm 10.34.9
+… v11      ← 系统 pnpm 12.5.1
+```
+
+于是推断「v10 与 v11 是不同内容寻址布局，跨布局不能共用，只能重装 profile」。这个推断
+**每一环都自洽，结论是错的**：真正的旧 store 在 `/vol1/@appshare/dsh/.pnpm-store/v10`，
+和新的那个**同为 v10**，只是**路径不同**。那个 v11 是系统 pnpm 12.5.1 留下的无关目录，
+根本不是这份 profile 的来源。
+
+拿到完整报错文本后，正确的因果只有两句：
+
+- 旧 `node_modules` 是在 `HOME` 指向别处时装出来的，store 落在 `/vol1/@appshare/dsh/.pnpm-store`；
+- 现在 `HOME=.dsh-home`，pnpm 默认算 `…/.dsh-home/.local/share/pnpm/store`，两者对不上。
+
+修法因此从「重装 66MB 的 profile（还带下载风险）」变成「写一行 `store-dir` 配置」——
+代价差了两个数量级。教训：**报错里被截断的那半行信息量最大，先去拿完整文本，再从目录清单反推**。
+反推出来的自洽故事最难自查，因为它不产生任何失败信号。
+
+顺带定下配置的落点：写 pnpm 自己的全局配置 `$HOME/.config/pnpm/rc`，而不是 `.npmrc` ——
+后者会被 npm 也读一遍，等于给 `pnpm view`（内部转发给 npm）凭空加一条它不认识的键。
