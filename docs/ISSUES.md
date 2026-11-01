@@ -1184,34 +1184,39 @@ If you want to use the new store location, reinstall your dependencies with "pnp
 **要点**：这不是「装不上包」，是 pnpm 拒绝在**用别的 store 装出来的** `node_modules` 上继续操作。
 pnpm 把依赖以硬链/符号链形式指向 store，换 store 就等于换了一套内容寻址目录，它不敢混用。
 
-**最可能的成因**（待 `.modules.yaml` 证实）：`profiles/web` 那份 `node_modules` 建于 **10-29**，
-当时运行时里**还没有 pnpm**，dsh 的 `spawn("pnpm")` 命中的是系统 `/usr/local/bin/pnpm`
-（**12.5.1**，9-20 装的原生二进制）；0.7.x 起用的是自带的 **10.34.9**，两者 store 布局/路径不同，
-于是「旧 node_modules + 新 pnpm」正好触发这条错误。这也解释了为什么错误在 F28/F29 修完才浮现 ——
-前两轮根本没走到安装这一步。
+**成因（2026-11-01 17:10 实查确认）**：`profiles/web` 那份 `node_modules` 建于 **10-29**，当时运行时里
+**还没有 pnpm**，dsh 的 `spawn("pnpm")` 命中的是系统 `/usr/local/bin/pnpm`（**12.5.1**，9-20 装的原生
+二进制）。0.7.x 起用自带的 **10.34.9**，两者的 store **布局版本不同**，目录并存于同一 HOME 下：
 
-**判据（只读，一条命令）**：
-
-```bash
-grep -E 'storeDir|virtualStoreDir|layoutVersion|packageManager' \
-  /vol1/@appshare/dsh/workspace/.dsh-home/profiles/web/node_modules/.modules.yaml
+```console
+$ du -sh /vol1/@appshare/dsh/workspace/.dsh-home/.local/share/pnpm/store/*
+… v10      ← 自带 pnpm 10.34.9
+… v11      ← 系统 pnpm 12.5.1（旧 profile 用的就是这个）
 ```
 
-`storeDir` 若指向 `/root/.local/share/pnpm/store/...` 或带别的 `vN` 后缀，即证实上面的推断
-（还有第三种可能：早期由 root 的 HOME 装出来的，那样连硬链权限都是错的）。
+`v10` / `v11` 是 pnpm 的**内容寻址布局版本**，不是配置项 —— 所以「把 store-dir 指回去」这种
+省事办法在这里不成立（跨布局不能共用）。锁文件 `lockfileVersion: '9.0'` 也印证是 pnpm 9/10 时代
+的格式由 12 写到同一套约定里，靠锁文件本身看不出差异。
 
-**修法方向**：
+这也解释了为什么错误在 F28/F29 修完才浮现：前两轮根本没走到 `pnpm add`。**只影响这台机器**
+—— 新装的应用由自带 pnpm 创建 profile，store 天生一致，不会遇到。
 
-- **A（推荐，一次到位）**：用自带 pnpm 在 profile 里重装一遍（`pnpm install`），让
-  `node_modules` 改挂到 dsh 自己 HOME 下的 store。代价是一次网络下载（bundle 有几百 MB），
-  收益是以后 `pnpm add` 不再受历史包袱影响。做之前必须备份 `package.json` / `pnpm-lock.yaml` /
-  `cordis*.yml`（体积很小），失败可回滚。
-- **B（不下载，可能不可行）**：把 pnpm 的 `store-dir` 指回 `.modules.yaml` 记的那条路径。
-  只有当两边 store **布局版本相同**时才成立；`vN` 不同就没法共用，只能回到 A。
+**判据（只读）**：
 
-**顺带的加固**：不管走 A 还是 B，最终都应把 store 位置**固定**下来（`cmd/main` 里设
-`npm_config_store_dir=$DSH_HOME/pnpm-store`），否则「谁用过一次系统 pnpm」就会再次把
-profile 带弯 —— 这个坑的本质是 store 由环境隐式决定。
+```bash
+# busybox 的 grep 不认 \s，别用 '^\s*storeDir:' —— 会静默返回空
+grep -a storeDir /vol1/@appshare/dsh/workspace/.dsh-home/profiles/web/node_modules/.modules.yaml
+du -sh /vol1/@appshare/dsh/workspace/.dsh-home/.local/share/pnpm/store/*
+```
+
+**修法（A，唯一可行）**：以 **dsh 身份**（`HOME=$DSH_HOME`）用自带 pnpm 在 profile 里重装一遍。
+要点三条，缺一条就会出新问题：
+
+1. **先把 `node_modules` 改名挪开**（同卷 rename，瞬时且可逆）：pnpm 见到旧布局会**再报同一条错**，
+   光 `pnpm install` 不解决问题。
+2. **必须切到 dsh 用户**跑，否则新文件属主是 root，dsh 读不了（F26 的老坑）。
+3. 装完核对 `node_modules/.modules.yaml` 的 `storeDir` 指向 **v10**，并保留 `node_modules.legacy-*`
+   与 `profiles/web.bak-*` 直到插件能装成功。
 
 ---
 
