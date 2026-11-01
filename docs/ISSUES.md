@@ -1481,7 +1481,10 @@ $ ls -lh /vol1/@appshare/dsh/backups/
 -rwx------ 1 dsh dsh 486M Nov  1 19:18 pre-upgrade-0.7.2-to-0.7.3-20261101-191752.tar.gz
 ```
 
+- `upgrade_init: backup: 迁移旧快照 pre-upgrade-0.7.1-to-0.7.2-20261101-183329.tar.gz
+  → /vol1/@appshare/dsh/backups`（19:17:52，与 `backup-dir` 同一 PID 569471）；
 - 新包 `backup: ok …pre-upgrade-0.7.2-to-0.7.3-20261101-191752.tar.gz (486M)`；
+- 旧目录 `@appdata/dsh/backups` 迁移后为空，`rmdir` 已把它移除（`ls -ld` 报不存在）；
 - 旧包（18:33 那份）出现在新目录且 **mtime 未被改写**，证明走的是同卷 `mv`（改名），
   不是重新打包——486M 没被真搬一遍；
 - `backup-dir:` 打印的路径与数据目录同时给出，以后路径再错一眼能看出来。
