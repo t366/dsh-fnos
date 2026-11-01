@@ -48,8 +48,9 @@
 | F25 | `auth-paths:` 用 root 身份探测，日志写「读写」而 dsh 实际读不了 | 缺陷（假阳性） | ⚠️ | `cmd/main` `probe_as_app()` 切到应用用户 + `sample_unreadable()` 抽查子项；**待装 0.6.8 验证** |
 | F26 | Web 端附件上传全灭：卷目录 000 撞上 dsh 的 fsync-to-root | 缺陷（权限） | ✅ | `chown dsh:dsh` + `chmod o+rx /vol1 /vol1/@appshare`；见正文 |
 | F27 | agent 会话环境三连坑：工作区不可写 / 工具 schema 误导 / 沙箱只读 | 缺陷（环境） | ⚠️ | 坑 1 已结案（走 dsh 授权通道）；坑 2/3 属工具与平台 |
-| F28 | 「添加插件」一律失败：运行时只有 node 二进制，没有 pnpm | 缺陷（打包） | ⚠️ | 0.6.9：`build.sh` 装 pnpm 10.34.9 + `cmd/main` 前置 PATH；真机 0.6.9 已消除 `spawn pnpm ENOENT`，但下一环仍报错 → 见 F29 |
-| F29 | 插件信息仍读不出来：pnpm 把 `view` 转发给系统 npm 10.9.3，和自带 node 24 不兼容 | 缺陷（打包/依赖链） | ⚠️ | 0.7.0：运行时成套带 npm 11.21.1（`runtime/npm` + `node/bin/npm` wrapper），打包时把 `pnpm view` 真跑一遍当门禁；**待装 0.7.1 验证**（0.7.1 同时把 dsh 升到 `0.2.1-rc.5`） |
+| F28 | 「添加插件」一律失败：运行时只有 node 二进制，没有 pnpm | 缺陷（打包） | ✅ | 0.6.9：`build.sh` 装 pnpm 10.34.9 + `cmd/main` 前置 PATH；真机已消除 `spawn pnpm ENOENT` |
+| F29 | 插件信息仍读不出来：pnpm 把 `view` 转发给系统 npm 10.9.3，和自带 node 24 不兼容 | 缺陷（打包/依赖链） | ✅ | 0.7.0：运行时成套带 npm 11.21.1 + 打包时真跑 `pnpm view` 当门禁；**0.7.1 真机已能读出包描述与 `版本 0.9.26`** |
+| F30 | 插件安装报 `ERR_PNPM_UNEXPECTED_STORE`：profile 的 node_modules 由别的 store 装出来 | 缺陷（依赖/环境） | ⚠️ | 待确认 `.modules.yaml` 的 `storeDir`；修法见正文（重装 profile 或对齐 store-dir） |
 | T1 | 0.5.0 打包与真机安装 | — | ✅ | `probe/05` 33 PASS / 1 WARN / 0 FAIL |
 | T2 | cookie 跨重启 / 令牌是否一次性 | — | ✅ | `probe/07` 10 PASS：令牌可复用、cookie 跨重启存活 |
 | T3 | 端口写死 3080，不可配置 | — | 📋 | 改端口=卸载重装 |
@@ -65,8 +66,8 @@
 
 ## 当前剩余问题（按优先级）
 
-> 截至 2026-11-01 17:05。真机已装 **`0.6.9`**（F28 的 pnpm 已生效，但插件仍失败 → **F29**）；
-> **`0.7.1`（F29 自带 npm + dsh 升到 `0.2.1-rc.5`）待打包安装**。
+> 截至 2026-11-01 17:10。真机已装 **`0.7.1`**：F28（pnpm）、F29（npm 转发）**已验通** ——
+> 插件信息能读出描述与 `版本 0.9.26`。失败点前移到安装阶段 → **F30（store 不一致）**。
 > 只列**还没关闭**的项；已修缺陷见第二节，平台限制见第一节。
 >
 > **已关闭（最近）**：P0 实例归属、F16 的 root 文件残留、T1 / T2（0.5.0 装机验收）、
@@ -93,7 +94,9 @@
 | 项 | 判据 | 前置 |
 |---|---|---|
 | **F28 插件安装（pnpm）** | 装 0.6.9 后 `grep 'start: pnpm=' /var/apps/dsh/var/info.log` 出现 `version=10.34.9（已前置到 PATH）`；Web 界面「添加插件」不再报 `spawn pnpm ENOENT` | ✅ 0.6.9 真机已验证（ENOENT 消失） |
-| **F29 插件安装（npm）** | 装 0.7.1 后 `grep 'start: npm=' /var/apps/dsh/var/info.log` 出现 `version=11.21.1`；Web 界面「添加插件」能读到版本号并开始下载；`grep -c 'minizlib' /vol1/@appshare/dsh/workspace/.dsh-home/.npm/_logs/*.log` 不再新增 | 装 0.7.1 |
+| **F29 插件安装（npm）** | 装 0.7.1 后 `grep 'start: npm=' /var/apps/dsh/var/info.log` 出现 `version=11.21.1`；Web 界面「添加插件」能读到版本号并开始下载 | ✅ 0.7.1 真机已验证（读出描述与 `版本 0.9.26`） |
+| **F30 插件安装（store）** | `grep -E 'storeDir\|layoutVersion' …/profiles/web/node_modules/.modules.yaml` 与 `pnpm store path` 指向同一 store；`pnpm add dsh-free-search` 不再报 `ERR_PNPM_UNEXPECTED_STORE` | 先取 `.modules.yaml` 的 `storeDir` |
+| **dsh 升到 rc.5** | `grep 'dsh 版本校验通过' ~/build-*.log` 是 `0.2.1-rc.5`；装完首屏、旧会话、工作区都正常，插件列表能打开；顺带复核 F24 的「可访问目录」入口是否还在（dsh 前端改版可能动到路径） | 装 0.7.1 |
 | **dsh 升到 rc.5** | `grep 'dsh 版本校验通过' ~/build-*.log` 是 `0.2.1-rc.5`；装完首屏、旧会话、工作区都正常，插件列表能打开；顺带复核 F24 的「可访问目录」入口是否还在（dsh 前端改版可能动到路径） | 装 0.7.1 |
 | **F22 默认工作区** | 工作区下拉里出现「默认工作区」且处于勾选态；`grep XDG_DOCUMENTS_DIR /vol1/@appshare/dsh/workspace/.dsh-home/.config/user-dirs.dirs` 指向共享目录；原 `Project` 与旧会话仍在 | 0.6.7 已装，等一句确认 |
 | ~~F23 访问权限~~ ✅ | 真机已验证：「访问权限」页出现，`存储空间1/T366的文件/Project` 加成「读写」成功 | 已完成 |
@@ -1158,6 +1161,57 @@ npm warn Unknown cli config "--config.fetch-retries". This will stop working in 
 
 **复现（手工验证「是不是 npm」）**：把 wrapper 换成会失败的一行，同一条命令必须报错 ——
 真机日志里 `verbose cli … /usr/local/bin/npm` 已经是等价证据。
+
+**✅ 0.7.1 真机确认（2026-11-01 17:05）**：界面已能读出 `dsh-free-search` 的描述与
+`版本 0.9.26` —— 说明 `pnpm view` 这条转发链彻底通了。失败点前移到安装阶段，见 F30。
+
+---
+
+### F30 插件安装报 `ERR_PNPM_UNEXPECTED_STORE`：profile 的 node_modules 与当前 pnpm 的 store 不一致 ⚠️
+
+**现象**（0.7.1 真机，安装 `dsh-free-search@0.9.26`）：
+
+```console
+$ pnpm add dsh-free-search --registry=https://registry.npmmirror.com/   退出码 1
+ERR_PNPM_UNEXPECTED_STORE  Unexpected store location
+
+The dependencies at "/vol1/@appshare/dsh/workspace/.dsh-home/profiles/web/node_modules"
+are currently linked from the store at "…"。
+pnpm now wants to use the store at "/vol1/@appshare/dsh/workspace/.dsh-home/.loc…"
+If you want to use the new store location, reinstall your dependencies with "pnpm install"
+```
+
+**要点**：这不是「装不上包」，是 pnpm 拒绝在**用别的 store 装出来的** `node_modules` 上继续操作。
+pnpm 把依赖以硬链/符号链形式指向 store，换 store 就等于换了一套内容寻址目录，它不敢混用。
+
+**最可能的成因**（待 `.modules.yaml` 证实）：`profiles/web` 那份 `node_modules` 建于 **10-29**，
+当时运行时里**还没有 pnpm**，dsh 的 `spawn("pnpm")` 命中的是系统 `/usr/local/bin/pnpm`
+（**12.5.1**，9-20 装的原生二进制）；0.7.x 起用的是自带的 **10.34.9**，两者 store 布局/路径不同，
+于是「旧 node_modules + 新 pnpm」正好触发这条错误。这也解释了为什么错误在 F28/F29 修完才浮现 ——
+前两轮根本没走到安装这一步。
+
+**判据（只读，一条命令）**：
+
+```bash
+grep -E 'storeDir|virtualStoreDir|layoutVersion|packageManager' \
+  /vol1/@appshare/dsh/workspace/.dsh-home/profiles/web/node_modules/.modules.yaml
+```
+
+`storeDir` 若指向 `/root/.local/share/pnpm/store/...` 或带别的 `vN` 后缀，即证实上面的推断
+（还有第三种可能：早期由 root 的 HOME 装出来的，那样连硬链权限都是错的）。
+
+**修法方向**：
+
+- **A（推荐，一次到位）**：用自带 pnpm 在 profile 里重装一遍（`pnpm install`），让
+  `node_modules` 改挂到 dsh 自己 HOME 下的 store。代价是一次网络下载（bundle 有几百 MB），
+  收益是以后 `pnpm add` 不再受历史包袱影响。做之前必须备份 `package.json` / `pnpm-lock.yaml` /
+  `cordis*.yml`（体积很小），失败可回滚。
+- **B（不下载，可能不可行）**：把 pnpm 的 `store-dir` 指回 `.modules.yaml` 记的那条路径。
+  只有当两边 store **布局版本相同**时才成立；`vN` 不同就没法共用，只能回到 A。
+
+**顺带的加固**：不管走 A 还是 B，最终都应把 store 位置**固定**下来（`cmd/main` 里设
+`npm_config_store_dir=$DSH_HOME/pnpm-store`），否则「谁用过一次系统 pnpm」就会再次把
+profile 带弯 —— 这个坑的本质是 store 由环境隐式决定。
 
 ---
 
