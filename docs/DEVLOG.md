@@ -1070,3 +1070,80 @@ F34 是同一个病：`PKGVAR` 的缺省值依赖「是谁在调用」，两个�
 
 **一个教训**：判据写「快照存在」是不够的，得写「快照在**用户真需要恢复的那一刻**
 还存在」。位置和内容一样是验收项——这次就是内容对了、位置错了。
+
+---
+
+## 阶段 31（2026-11-01 19:00）　0.7.3：快照换个抽屉，store 不再靠手工（F35 / F30）
+
+### 31.1　验收先落地：F33 与 F30 都拿到了正面证据
+
+```console
+$ awk '$0>="2026-11-01 18:33"' /var/apps/dsh/var/info.log | grep -c '"token":"[A-Za-z0-9_-]\{20,\}'
+0
+$ su -s /bin/sh dsh -c '… pnpm store path'
+/vol1/@appshare/dsh/.pnpm-store/v10
+```
+
+前者证明 0.7.2 的两条打码正则确实生效（同一份文件的旧行里仍有 23 个令牌，那是历史）；
+后者证明 F30 的修法方向对——把 pnpm 指回旧 store，`ERR_PNPM_UNEXPECTED_STORE` 就没了。
+**但这两条只说明「这台机器好了」，不说明「产品好了」**：打码是代码行为，可以放心关；
+store 那条是手工写 rc 的结果，换台机器重装就会重踩。所以 F33 关，F30 转成「要进代码」。
+
+### 31.2　F35：落点不是随便挑一个「不在 @appdata 的目录」
+
+约束有三条，同时满足的只有一处：
+
+| 约束 | 为什么 |
+|---|---|
+| 卸载后必须还在 | 否则「为了回滚而卸载重装」时快照先被自己删掉，等于没有 |
+| 别出现在用户的共享目录里 | 一份 486M 的 `tar.gz` 混在用户文件里，既占地方又像个垃圾文件 |
+| 同卷 | 跨卷 `mv` 会退化成「拷贝 + 删除」，486M 要真搬一遍 |
+
+`/vol1/@appshare/dsh/backups` 三条全中：`@appshare` 卸载只改权限（P6 实测）、
+它在 `workspace` 的上一级（用户看不到）、和 `@appdata` 同在 `/vol1`。
+
+顺手补了一个容易漏的动作：**把 `@appdata` 里的旧快照搬过来**。不搬的话，0.7.2 用户
+升级完 0.7.3 会同时有两套目录，而回滚时多半只想到新的那套——那份 486M 就静静躺在
+一个下次卸载必死的抽屉里。搬迁用 `mv`（同卷改名）+ 同名去重，日志逐条留痕。
+
+还有个反向用例值得记：共享目录**不在** `@appshare` 下时（比如平台以后改成用户目录），
+绝不能顺着 `dirname` 把 `backups/` 写到 `/vol1` 根上。所以判断写在
+`dsh_appshare_root()` 里：只有路径里出现 `/@appshare/` 才认，否则退回 `$PKGVAR/backups`。
+本地用 `/tmp/…/userdata/workspace` 这种假路径验过这一支。
+
+### 31.3　F30：为什么不「钉死一个 store 路径」
+
+第一反应是「统一钉到 `@appshare/dsh/.pnpm-store`」，这样新旧机器一致、听起来最省事。
+但这条路会把**现在正常的机器弄坏**：0.2.0 起 HOME 已经是 `.dsh-home`，之后装的 profile
+都链在 `.dsh-home/.local/share/pnpm/store` 上；一钉死，它们的 `node_modules` 与「新指定的
+store」立刻不一致——我们亲手制造出正在修的那个错误。
+
+所以改成**跟着已装 profile 走**：读 `profiles/*/node_modules/.modules.yaml` 里 pnpm 自己
+写下的 `storeDir`，把同一个路径写进 `$HOME/.config/pnpm/rc`。三条约束：
+
+1. 已有 `store-dir` 配置 → 一个字都不改（用户可能故意指到别的盘）；
+2. 没有 profile → 不写（新装的 profile 与当时的默认 store 天然自洽，写了反而添乱）；
+3. `storeDir` 末尾带布局版本目录（`…/v10`），而配置项要的是**不带**它的父路径，
+   否则会拼成 `…/v10/v10`——削之前先看末尾是不是 `/v<数字>`。
+
+放 `main start` 而不是 `install_callback`：这是**运行时状态**（profile 随时可能被装/删），
+不是安装时的一次性事实；而且 `main` 里已经有 `own_by_app`，属主处理不用再写一遍。
+
+### 31.4　改了什么 / 验了什么
+
+| 位置 | 改动 |
+|---|---|
+| `fpk/cmd/lib-home` | 新增 `dsh_appshare_root()`、`dsh_backup_dir_for()`、`dsh_store_dir_for()` |
+| `fpk/cmd/upgrade_init` | 快照改落 `@appshare/<app>/backups`；打印 `backup-dir:`；搬迁 `@appdata` 旧快照 |
+| `fpk/cmd/main` | 新增 `ensure_pnpm_store_dir()`，`start` 里在拉起 dsh 前调用 |
+| `fpk/selftest.sh` | 断言启动日志里有 `pnpm-store:` 决策（60 通过 / 26 跳过 / 0 失败） |
+| `fpk/manifest` | 0.7.2 → **0.7.3** + changelog |
+| `docs/` | ISSUES（F30/F33/F35 状态、A/B 档重整）、RUNBOOK（落点与两条新判据）、README |
+
+本地验证（`.tmp/t-073.sh`，不需要 NAS）：
+
+- 落点推导三种布局：正常 `@appshare`、无共享目录、共享目录不在 `@appshare` 下；
+- `ensure_pnpm_store_dir` 五支：无 profile 不写 rc、有 profile 削掉 `/v10` 后写入、
+  再跑一次沿用不追加、用户自配不覆盖、`storeDir` 本身不带版本时按原样写；
+- `upgrade_init` 搬迁：三份旧快照（其中一份在新位置已存在）→ 两份迁移、一份去重删除、
+  旧目录清空后移除，随后轮转仍只留 2 份。

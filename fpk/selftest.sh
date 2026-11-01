@@ -246,6 +246,12 @@ check "pnpm 版本取自包元数据" "9.9.9-selftest" \
   "$(grep 'start: pnpm=' "$ROOT/var/info.log" 2>/dev/null | grep -o 'version=[^（]*' | tail -n1 | cut -d= -f2-)"
 check "npm 版本取自包元数据" "9.9.9-selftest" \
   "$(grep 'start: npm=' "$ROOT/var/info.log" 2>/dev/null | grep -o 'version=[^（]*' | tail -n1 | cut -d= -f2-)"
+# F30：启动时必须对 pnpm 的 store 位置做一次决策（沿用 / 对齐 / 保持默认），
+# 否则「添加插件」会在 profile 的 node_modules 与当前 store 不一致时报
+# ERR_PNPM_UNEXPECTED_STORE。这里只断言「决策跑过了」；三条分支的行为
+# 由 .tmp/t-073.sh 单独覆盖（本沙箱不装 profile，只可能落到「无已装 profile」）。
+check "启动日志记录了 pnpm store 决策" "yes" \
+  "$(grep -q 'pnpm-store:' "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
 SPID="$(cut -d' ' -f1 "$ROOT/var/dsh.pid" 2>/dev/null || true)"
 if [ "$LINUX" = "yes" ] && [ -n "${SPID:-}" ] && [ -r "/proc/$SPID/environ" ]; then
   check_linux "子进程 PATH 已前置 runtime/node/bin" "yes" \

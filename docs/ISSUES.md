@@ -50,11 +50,11 @@
 | F27 | agent 会话环境三连坑：工作区不可写 / 工具 schema 误导 / 沙箱只读 | 缺陷（环境） | ⚠️ | 坑 1 已结案（走 dsh 授权通道）；坑 2/3 属工具与平台 |
 | F28 | 「添加插件」一律失败：运行时只有 node 二进制，没有 pnpm | 缺陷（打包） | ✅ | 0.6.9：`build.sh` 装 pnpm 10.34.9 + `cmd/main` 前置 PATH；真机已消除 `spawn pnpm ENOENT` |
 | F29 | 插件信息仍读不出来：pnpm 把 `view` 转发给系统 npm 10.9.3，和自带 node 24 不兼容 | 缺陷（打包/依赖链） | ✅ | 0.7.0：运行时成套带 npm 11.21.1 + 打包时真跑 `pnpm view` 当门禁；**0.7.1 真机已能读出包描述与 `版本 0.9.26`** |
-| F30 | 插件安装报 `ERR_PNPM_UNEXPECTED_STORE`：profile 的 node_modules 由别的 store 装出来 | 缺陷（依赖/环境） | ⚠️ | 待确认 `.modules.yaml` 的 `storeDir`；修法见正文（重装 profile 或对齐 store-dir） |
+| F30 | 插件安装报 `ERR_PNPM_UNEXPECTED_STORE`：profile 的 node_modules 由别的 store 装出来 | 缺陷（依赖/环境） | ✅ | 0.7.2 手工写 `store-dir` 后 `pnpm store path` 已回旧 store；0.7.3 起 `cmd/main` 每次启动按 `.modules.yaml` 自动对齐，**待装机验证** |
 | F31 | 升级前的数据快照一次都没跑过：备份的是 0.2.0 之前的老路径，`[ -d ]` 恒假静默跳过 | 缺陷（升级） | ✅ | 0.7.2 真机已验证：`backup: ok …pre-upgrade-0.7.1-to-0.7.2-20261101-183329.tar.gz (486M)`，`tar -tzf` 首行 `.dsh-home/` |
 | F32 | 凭据检查永远 `credentials: absent`：同一个失效路径，让「不用重新登录」这条验收无法证伪 | 缺陷（判据） | ✅ | 0.7.2 真机已验证：`home: /vol1/@appshare/dsh/workspace/.dsh-home` + `credentials: kept`（同日 16:10 / 17:05 两次旧版升级仍是 `absent`，构成对照） |
-| F35 | 升级快照落在 `@appdata/dsh/backups`，而卸载会清空该目录内容（P6）：真要回滚就得卸载重装，快照先被卸载删掉 | 缺陷（恢复路径） | ⚠️ | 计划：快照改落 `@appshare/dsh/backups`（与 `workspace` 平级，卸载不清空）；见下文 |
-| F33 | 启动日志明文写入完整登录令牌（`"token":"…"` 未打码），而 info.log 正是外发排障的那份 | 缺陷（安全） | ✅ | 0.7.2：`start: state=` 两条正则都打码；`dsh web:` 那行控制不了，改由 RUNBOOK 强制脱敏 |
+| F35 | 升级快照落在 `@appdata/dsh/backups`，而卸载会清空该目录内容（P6）：真要回滚就得卸载重装，快照先被卸载删掉 | 缺陷（恢复路径） | ⚠️ | 0.7.3：`lib-home` 加 `dsh_backup_dir_for()`，落点改 `@appshare/dsh/backups`，并搬迁旧快照；**待装机验证** |
+| F33 | 启动日志明文写入完整登录令牌（`"token":"…"` 未打码），而 info.log 正是外发排障的那份 | 缺陷（安全） | ✅ | 0.7.2：`start: state=` 两条正则都打码；2026-11-01 18:33 之后的行实测 **0 命中**；`dsh web:` 那行控制不了，改由 RUNBOOK 强制脱敏 |
 | F34 | 手工启动算出第二个 var 目录 → 两套 pidfile → 3080 被占 2h20m | 缺陷（路径） | ✅ | 0.7.2：`PKGVAR` 缺省值按 `@appcenter → @appdata` 归一 |
 | T1 | 0.5.0 打包与真机安装 | — | ✅ | `probe/05` 33 PASS / 1 WARN / 0 FAIL |
 | T2 | cookie 跨重启 / 令牌是否一次性 | — | ✅ | `probe/07` 10 PASS：令牌可复用、cookie 跨重启存活 |
@@ -75,14 +75,20 @@
 > **A 档**一条命令能关、**B 档**要改代码（已定方案待排期）、**C 档**证据已在手可直接结案、
 > **D 档**明知有风险但决定先不动。已修缺陷见第二节，平台限制见第一节，历史验收见第三节。
 >
-> **最近关闭**：F31（升级快照真会打了，486M）、F32（凭据判据不再误报）——见 DEVLOG 阶段 30。
+> **最近关闭**：F31（升级快照真会打了，486M）、F32（凭据判据不再误报）——见 DEVLOG 阶段 30；
+> **F33**（0.7.2 之后的行令牌 0 命中，2026-11-01 18:37 实测）。
 
-### A 档　差一条命令（零成本，建议先做）
+### 0.7.3 已就位，等一次装机
+
+| 项 | 判据 | 代码在哪 |
+|---|---|---|
+| **F35 快照落点** | 装 0.7.3 时 `grep backup-dir: /var/apps/dsh/var/info.log` 应是 `/vol1/@appshare/dsh/backups`；同一份日志里应有「迁移旧快照 … → 」那一行，把 0.7.2 的 486M 包搬过去 | `lib-home` `dsh_backup_dir_for()` + `upgrade_init` |
+| **F30 store 自愈** | 装 0.7.3 后启动，`grep pnpm-store: info.log` 应出现「对齐已有 profile → store-dir=…」或「沿用已有配置」（本机已手工配过，属后者）；界面能装插件 | `main` `ensure_pnpm_store_dir()` |
+
+### A 档　差一条命令（零成本，建议先做；F33 已在此档关掉，F30 见上一档）
 
 | 项 | 判据 | 现状 / 缺什么 |
 |---|---|---|
-| **F33 令牌打码** | 只看 0.7.2 之后的行：`awk '$0>="2026-11-01 18:33"' /var/apps/dsh/var/info.log \| grep -c '"token":"[A-Za-z0-9_-]\{20,\}'` 应为 **0** | 手上那份 info.log 只到 17:15（升级前），23 条全是旧代码漏的；**新行还没人看** |
-| **F30 store 对齐** | `su -s /bin/sh dsh -c 'cd / && HOME=/vol1/@appshare/dsh/workspace/.dsh-home PATH=/var/apps/dsh/target/runtime/node/bin:$PATH pnpm store path'` 打印 `/vol1/@appshare/dsh/.pnpm-store/v10`；界面「添加插件」不再报 `ERR_PNPM_UNEXPECTED_STORE` | 修法是**手工**写 `$DSH_HOME/.config/pnpm/rc`，代码里 `grep -rn store-dir fpk/` 为空 —— 换台机器重装就会重踩 |
 | **F25 探测身份** | 造一个 `700 root` 的目录加进授权列表，`grep '读不了' info.log` 应出现该目录，且不再写「读写」 | 现有 25 条 `auth-paths` **全是（读写）**，假阳性那条分支从没被触发过 |
 | **F34 var 归一** | 停应用后 `bash /var/apps/dsh/cmd/main start`：`/vol1/@appdata/dsh/dsh.pid` 在、`/var/apps/dsh/var/dsh.pid` 不在 | 可选；手工启动属风险操作，要顺手确认再停一次能停干净 |
 
@@ -90,7 +96,6 @@
 
 | 项 | 工作量 | 不做的后果 |
 |---|---|---|
-| **F35 快照落点** → `@appshare/dsh/backups` | 小：`lib-home` 加 `dsh_backup_dir_for()` + `upgrade_init` 换调用 | 卸载重装（RUNBOOK 4.2）会把唯一回滚副本一起删掉 |
 | **T6 双网卡** | 中：launcher 绑通配 + 302 到单 IP；dsh 本体拒绝 `0.0.0.0` | 无线网段 `.109` 打不开；换 IP 后静默失效到重启 |
 | **瘦身** 977MB（fpk 199MB）→ 约 120MB | 中：`install_dep_apps: nodejs_v24` + 去 bundled node | 安装慢、占用翻倍 |
 | **插件能力** | 中：`bin/dsh` 包装 + 官方 plugin market bundle | 「一切皆插件」用不起来，只能一个个手装 |
@@ -1161,7 +1166,7 @@ npm warn Unknown cli config "--config.fetch-retries". This will stop working in 
 
 ---
 
-### F30 插件安装报 `ERR_PNPM_UNEXPECTED_STORE`：profile 的 node_modules 与当前 pnpm 的 store 不一致 ⚠️
+### F30 插件安装报 `ERR_PNPM_UNEXPECTED_STORE`：profile 的 node_modules 与当前 pnpm 的 store 不一致 ✅（0.7.2 手工生效，0.7.3 起自愈）
 
 **现象**（0.7.1 真机，安装 `dsh-free-search@0.9.26`）：
 
@@ -1210,6 +1215,27 @@ su -s /bin/sh dsh -c "cd / && HOME='$H' PATH=/var/apps/dsh/target/runtime/node/b
 以 dsh 身份在新 store 下 `pnpm install` 一次。要点三条：先挪开（否则 pnpm 仍报同一错误）、
 必须切到 dsh 用户（否则属主变 root，F26 老坑）、装完核对 `.modules.yaml` 的 `storeDir`。
 
+**真机结果（2026-11-01 18:54）**：按上面手工写完 rc 后
+
+```console
+$ su -s /bin/sh dsh -c '… pnpm store path'
+/vol1/@appshare/dsh/.pnpm-store/v10
+```
+
+即 store 已回旧路径，插件安装恢复。但这只是**这台机器被手工治好**，新装一台仍会重踩。
+
+**0.7.3 起自愈**：`cmd/main` 的 `ensure_pnpm_store_dir()` 在每次 `start` 时（拉起 dsh 之前）：
+
+1. `$DSH_HOME/.config/pnpm/rc` 里已有 `store-dir` → 原样沿用，只在日志里回显（不动用户配置）；
+2. 否则读 `profiles/*/node_modules/.modules.yaml` 的 `storeDir`，削掉末尾 `/v10` 这类
+   布局版本目录后写进该 rc —— **跟着已装 profile 走**，而不是钉死一个我们以为对的路径
+   （硬钉反而会给「用当前默认 store 装出来的 profile」制造同样的冲突）；
+3. 一个 profile 都没有 → 什么都不写，日志说明「保持 pnpm 默认」。
+
+日志一行即可判定：`pnpm-store: 沿用已有配置 …` / `pnpm-store: 对齐已有 profile → store-dir=…` /
+`pnpm-store: 无已装 profile，保持 pnpm 默认（…）`。三条分支与幂等性都在
+`.tmp/t-073.sh` 里跑过。
+
 
 ### F31 升级前的数据快照一次都没跑过：备份的是 0.2.0 之前的老路径 ✅（0.7.2 修复，2026-11-01 18:33 真机验证）
 
@@ -1244,7 +1270,7 @@ su -s /bin/sh dsh -c "cd / && HOME='$H' PATH=/var/apps/dsh/target/runtime/node/b
 
 ```bash
 grep -E 'upgrade_init: (backup|home)' /var/apps/dsh/var/info.log | tail -n 5
-ls -lh /vol1/@appdata/dsh/backups/          # 应有 pre-upgrade-0.7.2-to-0.7.x-*.tar.gz
+ls -lh /vol1/@appdata/dsh/backups/          # 0.7.2 的落点（0.7.3 起改 @appshare，见 F35）
 tar -tzf /vol1/@appdata/dsh/backups/pre-upgrade-*.tar.gz | head   # 首行应为 .dsh-home/
 ```
 
@@ -1308,7 +1334,7 @@ $ tar -tzf ….tar.gz | head -3
 未出现配对页，与 `kept` 一致。
 
 
-### F33 启动日志明文写入完整登录令牌，而这份日志正是要发出去排障的那份 ⚠️（0.7.2 已修）
+### F33 启动日志明文写入完整登录令牌，而这份日志正是要发出去排障的那份 ✅（0.7.2 修复，2026-11-01 18:37 真机验证）
 
 **发现方式**：分析 `info.log` 时注意到，把这份文件发给开发者，就等于把**当时仍然有效**
 的入口令牌一起发了出去（该轮 `dsh` 进程还在跑，令牌没过期）。
@@ -1339,6 +1365,17 @@ after : {"url":"…?token=***","token":"***","host":…}
 
 **判据**：新包启动后 `grep -c '"token":"[A-Za-z0-9_-]\{20,\}' info.log` 应为 0；
 `grep -c 'token=[A-Za-z0-9_-]\{20,\}' info.log` 仍会命中 `dsh web:` 那行，属已知残留。
+
+**真机验证（2026-11-01 18:37）**：
+
+```console
+$ awk '$0>="2026-11-01 18:33"' /var/apps/dsh/var/info.log | grep -c '"token":"[A-Za-z0-9_-]\{20,\}'
+0
+```
+
+时间窗卡在升级之后，所以只统计 0.7.2 写的行——旧行里的 23 个令牌仍在（那是历史，
+不影响结论）。同日 17:15 的那份日志每条 `start: state=` 都带明文 `"token":"1WFc…"`，
+两相对照即知打码确实生效。
 
 
 ### F34 手工启动会算出第二个 var 目录：两套 pidfile 谁也杀不掉谁，3080 被占 2 小时 20 分 ⚠️（0.7.2 已修）
@@ -1375,7 +1412,7 @@ after : {"url":"…?token=***","token":"***","host":…}
 `ls -l /vol1/@appdata/dsh/dsh.pid` 应存在，且 `/var/apps/dsh/var/dsh.pid` **不**出现。
 
 
-### F35 升级快照放在「卸载就会被清空」的目录里：真要回滚时它先没了 ⚠️（待 0.7.3）
+### F35 升级快照放在「卸载就会被清空」的目录里：真要回滚时它先没了 ⚠️（0.7.3 修复，待装机验证）
 
 **发现方式**：F31 真机验证后顺带看落点——`backup: ok /vol1/@appdata/dsh/backups/…`。
 这个路径正是 **P6** 里实测过的「卸载后目录还在、内容被清空」的那个 `@appdata`。
@@ -1391,19 +1428,25 @@ after : {"url":"…?token=***","token":"***","host":…}
 而后者恰恰是用户真正会去回滚的场景。另外 `@appdata` 与 `@appshare` 同在 `/vol1`，
 挪位置不产生跨卷拷贝成本。
 
-**修法（计划）**：
+**修法（0.7.3 已实现）**：
 
-1. `cmd/lib-home` 增加 `dsh_backup_dir_for()`：数据目录在共享目录里时，返回
-   `<共享目录的父目录>/backups`（实测即 `/vol1/@appshare/dsh/backups`），
-   否则退回 `$PKGVAR/backups`（老布局兜底）；
-2. `cmd/upgrade_init` 改用它，日志里同时打印 `backup-dir:`；
-3. RUNBOOK 4.2 补一句硬约束：**卸载必须选「保留会话、凭据与设置」**，
-   选「不保留」会连 `@appshare/dsh` 一起删，快照和会话都救不回来；
-4. `probe/05` 断言包内含 `cmd/lib-home` 已有，无需改。
+1. `cmd/lib-home` 增加 `dsh_appshare_root()` / `dsh_backup_dir_for()`：以
+   `<共享目录里 @appshare 之前的部分>/@appshare/<应用名>` 为「存活根」，
+   快照落 `<根>/backups`（本机即 `/vol1/@appshare/dsh/backups`，与 `workspace` 平级，
+   不出现在用户的共享目录视图里）；共享目录不在 `@appshare` 下时退回
+   `$PKGVAR/backups`，**不会**把 `backups/` 写到 `/vol1` 根上（有本地用例覆盖）；
+2. `cmd/upgrade_init` 改用它并打印 `backup-dir:`；升级时把 `@appdata` 里的旧快照
+   **一并搬过来**（同卷 `mv` 只是改名），同名已在新的位置则删重复，避免漏搬要到
+   回滚那天才发现；
+3. RUNBOOK 4.2 补硬约束：**卸载必须选「保留会话、凭据与设置」**，
+   选「不保留」会连 `@appshare/dsh` 一起删，快照和会话都救不回来。
 
-**判据**：装 0.7.3 后 `ls /vol1/@appshare/dsh/backups/` 有新的 `pre-upgrade-*.tar.gz`；
-再走一次「卸载（保留）→ 重装」，该文件仍在（`@appshare` 权限变 000 由
-`install_callback` 自愈，不影响内容）。
+**判据**：装 0.7.3 后 `ls /vol1/@appshare/dsh/backups/` 有新的 `pre-upgrade-*.tar.gz`
+（且 0.7.2 那份 486M 也在，日志里有「迁移旧快照」）；再走一次「卸载（保留）→ 重装」，
+该文件仍在（`@appshare` 权限变 000 由 `install_callback` 自愈，不影响内容）。
+
+本地已验证（`.tmp/t-073.sh`）：落点推导三种布局（`@appshare` / 无共享目录 / 共享目录
+不在 `@appshare` 下）、旧快照迁移与同名去重、轮转仍只留 2 份。
 
 
 ---

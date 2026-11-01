@@ -46,3 +46,29 @@ dsh_home_for() { # $1=PKGVAR（必填）
     printf '%s/dsh-home' "${1:?dsh_home_for: 需要 PKGVAR}"
   fi
 }
+
+# 应用自己的「存活根目录」= <卷>/@appshare/<应用名>。
+# 卸载只把它改成 000（内容保留），而 @appdata 会被清空 —— 这个差别决定了
+# 哪些东西该放在这里。取不到（不在 @appshare 下）时返回空串。
+dsh_appshare_root() {
+  local share
+  share="$(dsh_share_dir)"
+  case "$share" in
+    */@appshare/*) printf '%s/@appshare/%s' "${share%%/@appshare/*}" "${APPNAME:-dsh}" ;;
+    *) printf '' ;;
+  esac
+}
+
+# 升级前快照的落点。**不能**放 @appdata：卸载会清空它，而「为了回滚而卸载重装」
+# 恰恰是唯一会用到快照的场景，等于备份先被自己删掉（F35）。
+# 放 @appshare 下与应用目录平级：卸载存活、同卷改名不产生拷贝、也不出现在
+# 用户的共享目录视图里。共享目录不可用时退回 <PKGVAR>/backups（聊胜于无）。
+dsh_backup_dir_for() { # $1=PKGVAR（必填）
+  local root
+  root="$(dsh_appshare_root)"
+  if [ -n "$root" ]; then
+    printf '%s/backups' "$root"
+  else
+    printf '%s/backups' "${1:?dsh_backup_dir_for: 需要 PKGVAR}"
+  fi
+}

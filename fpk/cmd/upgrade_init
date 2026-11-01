@@ -44,7 +44,28 @@ log "begin (${TRIM_OLD_APPVER:-?} -> ${TRIM_APPVER:-?})"
 # info.log 里 backup 出现 0 次（2026-11-01 复盘，见 ISSUES F31）。
 . "$CMD_DIR/lib-home" || fail "安装包不完整：缺少 cmd/lib-home，无法定位数据目录。"
 DSH_HOME="$(dsh_home_for "$PKGVAR")"
-BACKUP_DIR="$PKGVAR/backups"
+BACKUP_DIR="$(dsh_backup_dir_for "$PKGVAR")"
+LEGACY_BACKUP_DIR="$PKGVAR/backups"
+
+# 0.7.2 及以前快照写在 @appdata，而卸载会清空那里（F35）。这里先把旧快照搬到
+# 新落点：同卷 mv 只是改名，不占额外空间，也不会因为漏搬而在用户回滚时才发现丢了。
+if [ "$BACKUP_DIR" != "$LEGACY_BACKUP_DIR" ] && [ -d "$LEGACY_BACKUP_DIR" ]; then
+  mkdir -p "$BACKUP_DIR" 2>/dev/null
+  for _old in "$LEGACY_BACKUP_DIR"/pre-upgrade-*.tar.gz; do
+    [ -f "$_old" ] || continue
+    if [ -e "$BACKUP_DIR/$(basename "$_old")" ]; then
+      rm -f "$_old" 2>/dev/null
+      log "backup: 旧快照已在新位置，删除重复 $(basename "$_old")"
+    elif mv "$_old" "$BACKUP_DIR/" 2>/dev/null; then
+      log "backup: 迁移旧快照 $(basename "$_old") → $BACKUP_DIR"
+    else
+      log "WARN: 无法迁移旧快照 $_old（将留在原地，卸载时可能丢失）"
+    fi
+  done
+  rmdir "$LEGACY_BACKUP_DIR" 2>/dev/null || true
+fi
+
+log "backup-dir: $BACKUP_DIR（数据目录 $DSH_HOME）"
 
 if [ -d "$DSH_HOME" ]; then
   mkdir -p "$BACKUP_DIR" 2>/dev/null \

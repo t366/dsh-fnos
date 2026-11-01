@@ -499,6 +499,58 @@ EOF
 #   * 工作区登记的是 realpath 之后的规范路径，所以软链不影响 dsh 的唯一性判据。
 ACCESS_LINK_DIRNAME="可访问目录"
 
+# pnpm 的 store 位置对齐（F30）。
+#
+# 背景：dsh 装插件走 `pnpm add`，而 pnpm 把依赖以硬链指向内容寻址 store。
+# 0.2.0 之前 HOME 指向 @appshare/dsh，profile 的 node_modules 就链到
+# @appshare/dsh/.pnpm-store；0.2.0 起 HOME 改成 .dsh-home，pnpm 便想换到
+# .dsh-home/.local/share/pnpm/store —— 两处 store 不同 → ERR_PNPM_UNEXPECTED_STORE，
+# 插件装不上，而且报错只说「store 不一致」，不告诉你怎么修。
+#
+# 修法不是「钉死一个路径」，而是**跟着已有 profile 走**：读它 node_modules/.modules.yaml
+# 里记录的 storeDir，把同一个路径写进 pnpm 的全局配置。没有 profile 就什么都不写
+# （新装的 profile 与当时的默认 store 天然自洽，硬钉反而会制造同样的冲突）。
+#
+# 配置写在 $HOME/.config/pnpm/rc，不写 .npmrc：后者 npm 也会读，等于凭空给它
+# 加一个不认识的键（pnpm 的 view/add 内部会转发给 npm，见 F29）。
+ensure_pnpm_store_dir() {
+  local rc="$DSH_HOME/.config/pnpm/rc" f store="" cur=""
+
+  if [ -f "$rc" ]; then
+    cur="$(sed -n 's/^[[:space:]]*store-dir[[:space:]]*=[[:space:]]*//p' "$rc" 2>/dev/null | tail -n1)"
+  fi
+  if [ -n "$cur" ]; then
+    log "pnpm-store: 沿用已有配置 $cur"
+    return 0
+  fi
+
+  for f in "$DSH_HOME"/profiles/*/node_modules/.modules.yaml; do
+    [ -f "$f" ] || continue
+    store="$(sed -n 's/^storeDir:[[:space:]]*//p' "$f" 2>/dev/null | head -n1 | tr -d "\"'")"
+    [ -n "$store" ] && break
+    store=""
+  done
+
+  if [ -z "$store" ]; then
+    log "pnpm-store: 无已装 profile，保持 pnpm 默认（$DSH_HOME/.local/share/pnpm/store）"
+    return 0
+  fi
+
+  # pnpm 的 storeDir 末尾带布局版本目录（…/v10），而 store-dir 配置要的是**不带**它的
+  # 父路径，否则会拼成 …/v10/v10。只削一个尾部 /v<数字>。
+  case "$store" in
+    */v[0-9]|*/v[0-9][0-9]) store="${store%/*}" ;;
+  esac
+
+  if mkdir -p "$DSH_HOME/.config/pnpm" 2>/dev/null \
+     && printf 'store-dir=%s\n' "$store" >>"$rc" 2>/dev/null; then
+    own_by_app "$DSH_HOME/.config" "$DSH_HOME/.config/pnpm" "$rc"
+    log "pnpm-store: 对齐已有 profile → store-dir=$store（写入 $rc）"
+  else
+    log "WARN: 无法写入 $rc，插件安装可能报 ERR_PNPM_UNEXPECTED_STORE"
+  fi
+}
+
 link_accessible_paths() {
   local raw="${TRIM_DATA_ACCESSIBLE_PATHS:-}" dir link p base name suffix created=0
   local -a cand keep
@@ -854,6 +906,9 @@ do_start() {
   # 这里已经过了 is_running 的早退，确定没有 dsh 进程在跑，改注册表才安全。
   ensure_documents_dir
   ensure_default_workspace
+  # pnpm 的 store 必须和已装 profile 对齐，否则「添加插件」一律 ERR_PNPM_UNEXPECTED_STORE（F30）。
+  # 只读 profile 元数据 + 可能写一行配置，幂等，放心每次启动都跑。
+  ensure_pnpm_store_dir
   # 用户在「访问权限」里授权过的文件夹（F23）：记录 + 探测可读性，
   # 并把它们软链进 HOME，否则「选择工作区目录」里根本走不到（F24）。
   log_accessible_paths

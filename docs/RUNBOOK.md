@@ -88,7 +88,7 @@ pnpm 自检通过：10.34.9（app/runtime/pnpm 23M）
 npm 自检通过：11.21.1（app/runtime/npm 20M）
 端到端自检通过：pnpm view lodash version -> 4.18.1
 app/ 文件数：6.6 万左右
-产物：./dsh.fpk（约 208M，版本 0.7.2）
+产物：./dsh.fpk（约 208M，版本 0.7.3）
 ```
 
 - **`dsh 版本校验通过：0.2.1-rc.5` 必须是 rc.5**：这行是回读装进来的 `package.json` 得到的，
@@ -207,29 +207,44 @@ grep -E 'upgrade_(init|callback): (home|backup|credentials)' /var/apps/dsh/var/i
 
 | 期望行 | 含义 | 缺了说明 |
 |---|---|---|
+| `backup-dir: /vol1/@appshare/dsh/backups（数据目录 …）` | 快照落点（0.7.3 起） | 还指向 `@appdata` → 跑的是 0.7.2（F35，卸载会连快照一起删） |
 | `backup: ok …/backups/pre-upgrade-<旧>-to-<新>-<时间>.tar.gz (xxM)` | 升级前快照已落盘 | 0.7.2 之前这是**静默跳过**的（F31）；0.7.2 起失败会直接中止升级 |
+| `backup: 迁移旧快照 … → /vol1/@appshare/dsh/backups` | 把 `@appdata` 里的旧包搬到新落点 | 只在首次从 0.7.2 升级时出现一次，没出现也不影响升级 |
 | `home: /vol1/@appshare/dsh/workspace/.dsh-home` | 钩子解析到的数据目录 | 路径不对 → 快照与凭据检查都在看别处（F31/F32 的根因） |
 | `credentials: kept（cookie 签名密钥还在…）` | 已配对设备不用重新配对 | 写成 `absent` 而用户明明在用 → 路径又错了 |
+
+插件装不上时，先看 `main` 启动时对 pnpm store 的判断（0.7.3 起）：
+
+```bash
+grep 'pnpm-store:' /var/apps/dsh/var/info.log | tail -n 3
+# 沿用已有配置 …            → 你（或我们）已配过，没动它
+# 对齐已有 profile → …       → 按 profiles 的实际 store 自动写好了（F30 自愈）
+# 无已装 profile，保持默认   → 还没装过插件，正常
+```
 
 快照只留最近 2 份，随时可以这样确认与恢复：
 
 ```bash
-ls -lh /vol1/@appdata/dsh/backups/
-tar -tzf /vol1/@appdata/dsh/backups/pre-upgrade-*.tar.gz | head   # 首行应为 .dsh-home/
+ls -lh /vol1/@appshare/dsh/backups/
+tar -tzf /vol1/@appshare/dsh/backups/pre-upgrade-*.tar.gz | head   # 首行应为 .dsh-home/
 
 # 真要回滚数据（先停应用）：
 appcenter-cli stop dsh
-tar -xzf /vol1/@appdata/dsh/backups/pre-upgrade-<旧>-to-<新>-<时间>.tar.gz \
+tar -xzf /vol1/@appshare/dsh/backups/pre-upgrade-<旧>-to-<新>-<时间>.tar.gz \
     -C /vol1/@appshare/dsh/workspace
 appcenter-cli start dsh
 ```
 
-> ⚠️ **0.7.2 起快照落在 `@appdata`，而这个目录会被「卸载」清空**（P6 / F35）。
-> 所以：只要动了「卸载重装」的念头，**第一步先把快照拷出来**——
+> **落点的来历（F35）**：0.7.2 把快照写进 `@appdata/dsh/backups`，而卸载会清空
+> `@appdata` 的内容（P6）——偏偏「为了回滚而卸载重装」才是唯一会用到快照的场景。
+> **0.7.3 起落点改到 `/vol1/@appshare/dsh/backups/`**（与 `workspace` 平级，卸载只改
+> 权限、内容保留），升级时会把 `@appdata` 里的旧快照自动搬过来，日志打
+> `backup: 迁移旧快照 … →`。
+>
+> 还在 0.7.2 上、又打算卸载重装的，先手动拷一份出来：
 > ```bash
 > mkdir -p /vol1/1000/dsh-rollback && cp /vol1/@appdata/dsh/backups/pre-upgrade-*.tar.gz /vol1/1000/dsh-rollback/
 > ```
-> 0.7.3 会把落点改到 `/vol1/@appshare/dsh/backups/`（卸载不清空），届时本节会更新。
 
 ### 4.2　兜底：卸载（选保留）→ 安装
 
@@ -237,8 +252,9 @@ appcenter-cli start dsh
 
 1. 应用中心 → dsh → **卸载** → 弹窗选「**保留会话、凭据与设置**」；
    - 这一项**不能选错**：选「不保留」会连 `/vol1/@appshare/dsh` 一起删，
-     会话、凭据、以及 `@appdata/dsh/backups/` 里的升级快照全部不可恢复（P6 / F35）；
-   - 若你打算回滚数据，**卸载前**先把快照拷到 `/vol1/1000/` 下（命令见 4.1 末尾的提示框）；
+     会话、凭据、以及 `/vol1/@appshare/dsh/backups/` 里的升级快照全部不可恢复（P6 / F35）；
+   - 0.7.2 及更早装的，快照还在 `@appdata/dsh/backups/`，卸载前先拷到 `/vol1/1000/` 下
+     （命令见 4.1 末尾的提示框）；
 2. 应用中心 → **手动安装** → 选刚下载的 `dsh.fpk` → 安装；
    - 向导里 **API Key 留空 = 沿用旧值**，不要为了"干净"重填；
    - 「入口方式」保持默认「点图标直接进入」；
@@ -601,7 +617,7 @@ grep -c '"token":"[A-Za-z0-9_-]\{20,\}' ~/info.safe.log
 
 ```bash
 tail -n 50 /var/apps/dsh/var/info.log     # 安装、启停、失败原因、升级钩子都在这
-ls -lh /vol1/@appdata/dsh/backups/        # 升级前快照（0.7.2 起）
+ls -lh /vol1/@appshare/dsh/backups/        # 升级前快照（0.7.3 起；0.7.2 的旧包在 @appdata，升级时自动搬）
 cat /var/apps/dsh/var/launcher.json       # 本轮令牌与绑定地址
 ss -ltnp | grep 308                       # 端口有没有被占
 ```
