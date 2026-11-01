@@ -168,6 +168,14 @@ for s in install_init install_callback main upgrade_init upgrade_callback \
 done
 [ "$MISSING_X" = "1" ] && printf '\n提示：fnpack 若丢了执行位，build.sh 里的 chmod +x 需要改到打包之后再补，或改用 install_callback 里 chmod。\n'
 
+# 0.7.2 起 main / install_callback / upgrade_* 都 source 这个文件解析数据目录。
+# 它不需要 +x（被 source，不直接执行），但缺了应用直接起不来，必须单独查。
+if [ -f "$ROOT/cmd/lib-home" ]; then
+  ok "cmd/lib-home" "$(grep -c '^dsh_' "$ROOT/cmd/lib-home" 2>/dev/null) 个函数"
+else
+  bad "cmd/lib-home 缺失" "main 会以「安装包不完整」退出，应用起不来"
+fi
+
 # ---------------------------------------------------------------- 4
 sec "4. 应用用户与目录归属"
 if id "$APP" >/dev/null 2>&1; then

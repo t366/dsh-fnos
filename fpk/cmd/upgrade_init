@@ -19,21 +19,71 @@ fail() {
   exit 1
 }
 
+# 快照阶段出事时，应用已经被上面 stop 掉了。直接 exit 会让用户对着「已停止」
+# 猜原因，所以先按**旧运行时**把它拉回来再报错 —— 这一步失败不改变升级中止的结论。
+abort_upgrade() { # $1=原因
+  log "FAIL: $1"
+  if "$CMD_DIR/main" start >>"$LOGFILE" 2>&1; then
+    log "回滚: 已按原版本重新启动（数据未改动）"
+  else
+    log "WARN: 快照失败后自动回启也失败，请在应用中心手动启动"
+  fi
+  [ -n "$ERRFILE" ] && printf '%s\n' "$1" >"$ERRFILE" 2>/dev/null
+  exit 1
+}
+
 log "begin (${TRIM_OLD_APPVER:-?} -> ${TRIM_APPVER:-?})"
 
 # ---- 1. 防御性停机（不假设系统已经帮我们停了）----
 "$CMD_DIR/main" stop >>"$LOGFILE" 2>&1
 
-# ---- 2. 数据快照（M1 最小版；M2 会换成完整备份 + 轮转）----
-DSH_HOME="$PKGVAR/dsh-home"
+# ---- 2. 数据快照 ----
+# 必须在 stop 之后：会话是 SQLite，带 -wal 的时候打包只能拿到半份状态。
+# 路径不能写死 $PKGVAR/dsh-home —— 0.2.0 起数据在「共享目录/.dsh-home」，
+# 写死旧路径的后果是整段被 `[ -d ]` 静默跳过：0.6.1→0.7.1 共 7 次升级，
+# info.log 里 backup 出现 0 次（2026-11-01 复盘，见 ISSUES F31）。
+. "$CMD_DIR/lib-home" || fail "安装包不完整：缺少 cmd/lib-home，无法定位数据目录。"
+DSH_HOME="$(dsh_home_for "$PKGVAR")"
+BACKUP_DIR="$PKGVAR/backups"
+
 if [ -d "$DSH_HOME" ]; then
-  BACKUP="$PKGVAR/upgrade-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
-  if tar -czf "$BACKUP" -C "$PKGVAR" dsh-home 2>/dev/null; then
-    log "backup: $BACKUP ($(du -h "$BACKUP" 2>/dev/null | awk '{print $1}'))"
+  mkdir -p "$BACKUP_DIR" 2>/dev/null \
+    || abort_upgrade "无法创建快照目录 $BACKUP_DIR（磁盘满或权限不足），升级已中止。"
+
+  # 包名带 .dsh-home 这一层：恢复时直接 `tar -xzf … -C <共享目录>` 即可，
+  # 不需要记「当时解到哪」。
+  PARENT="$(dirname "$DSH_HOME")"
+  LEAF="$(basename "$DSH_HOME")"
+  BACKUP="$BACKUP_DIR/pre-upgrade-${TRIM_OLD_APPVER:-unknown}-to-${TRIM_APPVER:-unknown}-$(date +%Y%m%d-%H%M%S).tar.gz"
+
+  tar -czf "$BACKUP" -C "$PARENT" "$LEAF" >>"$LOGFILE" 2>&1
+  TARC=$?
+  if [ "$TARC" -eq 0 ]; then
+    log "backup: ok $BACKUP ($(du -sh "$BACKUP" 2>/dev/null | awk '{print $1}'))"
+  elif [ "$TARC" -eq 1 ] && [ -s "$BACKUP" ]; then
+    # GNU tar 的 1 = 打包过程中有文件变化，包仍然可用。停机之后理论上不该出现，
+    # 但为了不因为一个临时文件把升级卡死，按 WARN 放行并留痕。
+    log "WARN: 快照有文件在打包期间变化（tar rc=1），继续：$BACKUP"
   else
-    # 备份失败不阻断 M1 升级，但必须留痕，M2 会改成硬失败
-    log "WARN: backup failed, continuing (M1)"
+    # 2 及以上是真失败（磁盘满 / 权限 / 路径不存在）。继续下去是
+    # 「升级成功但回不了头」，比不升级更糟，所以硬停。
+    rm -f "$BACKUP" 2>/dev/null
+    abort_upgrade "升级前快照失败（$DSH_HOME → $BACKUP_DIR，tar rc=$TARC）：磁盘空间或权限不足。升级已中止，数据未改动。"
   fi
+
+  # 只留最近 2 份。每份是整份会话+插件（profiles 里可能有 node_modules），
+  # 不轮转的话升几次就把共享目录吃掉一块。
+  ls -1t "$BACKUP_DIR"/pre-upgrade-*.tar.gz 2>/dev/null | tail -n +3 | while IFS= read -r old; do
+    [ -f "$old" ] || continue
+    if rm -f "$old" 2>/dev/null; then
+      log "backup: 清理旧快照 $(basename "$old")"
+    else
+      log "WARN: 无法清理旧快照 $old"
+    fi
+  done
+else
+  # 目录不存在也要留痕：写错路径时必须看得出来，而不是像以前那样静默空转。
+  log "backup: 跳过——$DSH_HOME 不存在（首次安装，或数据目录尚未建立）"
 fi
 
 # ---- 3. 移走旧运行时 ----
@@ -49,6 +99,8 @@ fi
   printf 'FROM=%s\n' "${TRIM_OLD_APPVER:-unknown}"
   printf 'TO=%s\n' "${TRIM_APPVER:-unknown}"
   printf 'AT=%s\n' "$(date '+%F %T')"
+  printf 'DSH_HOME=%s\n' "$DSH_HOME"
+  printf 'BACKUP=%s\n' "${BACKUP:-}"
 } >"$PKGVAR/upgrade-state.conf" 2>/dev/null
 
 log "ok"

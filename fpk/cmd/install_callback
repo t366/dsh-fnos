@@ -38,20 +38,10 @@ fail() {
 
 # ---------------------------------------------------------------- 数据落点
 
-resolve_share() {
-  local first p
-  first="${TRIM_DATA_SHARE_PATHS:-}"
-  p="${first%%:*}"
-  if [ -n "$p" ] && [ -d "$p" ]; then printf '%s' "$p"; return 0; fi
-  for p in "/var/apps/$APPNAME/shares/workspace" \
-           "$SELF_DIR/../shares/workspace" \
-           "$SELF_DIR/../share/workspace"; do
-    [ -d "$p" ] && { printf '%s' "$p"; return 0; }
-  done
-  return 1
-}
-
-SHARE="$(resolve_share || true)"
+# 共享目录的解析统一在 cmd/lib-home（main / upgrade_* 用的是同一份，
+# 以前各写一遍，升级链路因此走偏过，见 ISSUES F31/F32）。
+. "$SELF_DIR/lib-home" || fail "安装包不完整：缺少 cmd/lib-home。"
+SHARE="$(dsh_share_dir)"
 DSH_HOME="$PKGVAR/dsh-home"
 MIRROR=""
 

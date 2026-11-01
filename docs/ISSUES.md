@@ -51,6 +51,10 @@
 | F28 | 「添加插件」一律失败：运行时只有 node 二进制，没有 pnpm | 缺陷（打包） | ✅ | 0.6.9：`build.sh` 装 pnpm 10.34.9 + `cmd/main` 前置 PATH；真机已消除 `spawn pnpm ENOENT` |
 | F29 | 插件信息仍读不出来：pnpm 把 `view` 转发给系统 npm 10.9.3，和自带 node 24 不兼容 | 缺陷（打包/依赖链） | ✅ | 0.7.0：运行时成套带 npm 11.21.1 + 打包时真跑 `pnpm view` 当门禁；**0.7.1 真机已能读出包描述与 `版本 0.9.26`** |
 | F30 | 插件安装报 `ERR_PNPM_UNEXPECTED_STORE`：profile 的 node_modules 由别的 store 装出来 | 缺陷（依赖/环境） | ⚠️ | 待确认 `.modules.yaml` 的 `storeDir`；修法见正文（重装 profile 或对齐 store-dir） |
+| F31 | 升级前的数据快照一次都没跑过：备份的是 0.2.0 之前的老路径，`[ -d ]` 恒假静默跳过 | 缺陷（升级） | ⚠️ | 0.7.2：`upgrade_init` 走 `cmd/lib-home`，快照进 `var/backups/`、留 2 份、tar 失败即中止；**待真机升级验证** |
+| F32 | 凭据检查永远 `credentials: absent`：同一个失效路径，让「不用重新登录」这条验收无法证伪 | 缺陷（判据） | ⚠️ | 0.7.2：`upgrade_callback` 按真实目录分三态判定并打印 `home:`；**待真机验证** |
+| F33 | 启动日志明文写入完整登录令牌（`"token":"…"` 未打码），而 info.log 正是外发排障的那份 | 缺陷（安全） | ✅ | 0.7.2：`start: state=` 两条正则都打码；`dsh web:` 那行控制不了，改由 RUNBOOK 强制脱敏 |
+| F34 | 手工启动算出第二个 var 目录 → 两套 pidfile → 3080 被占 2h20m | 缺陷（路径） | ✅ | 0.7.2：`PKGVAR` 缺省值按 `@appcenter → @appdata` 归一 |
 | T1 | 0.5.0 打包与真机安装 | — | ✅ | `probe/05` 33 PASS / 1 WARN / 0 FAIL |
 | T2 | cookie 跨重启 / 令牌是否一次性 | — | ✅ | `probe/07` 10 PASS：令牌可复用、cookie 跨重启存活 |
 | T3 | 端口写死 3080，不可配置 | — | 📋 | 改端口=卸载重装 |
@@ -66,8 +70,9 @@
 
 ## 当前剩余问题（按优先级）
 
-> 截至 2026-11-01 17:10。真机已装 **`0.7.1`**：F28（pnpm）、F29（npm 转发）**已验通** ——
+> 截至 2026-11-01 17:50。真机已装 **`0.7.1`**：F28（pnpm）、F29（npm 转发）**已验通** ——
 > 插件信息能读出描述与 `版本 0.9.26`。失败点前移到安装阶段 → **F30（store 不一致）**。
+> `0.7.2` 已就绪待装：修 F31–F34（升级快照、凭据判据、令牌明文、`var` 双目录）。
 > 只列**还没关闭**的项；已修缺陷见第二节，平台限制见第一节。
 >
 > **已关闭（最近）**：P0 实例归属、F16 的 root 文件残留、T1 / T2（0.5.0 装机验收）、
@@ -96,8 +101,11 @@
 | **F28 插件安装（pnpm）** | 装 0.6.9 后 `grep 'start: pnpm=' /var/apps/dsh/var/info.log` 出现 `version=10.34.9（已前置到 PATH）`；Web 界面「添加插件」不再报 `spawn pnpm ENOENT` | ✅ 0.6.9 真机已验证（ENOENT 消失） |
 | **F29 插件安装（npm）** | 装 0.7.1 后 `grep 'start: npm=' /var/apps/dsh/var/info.log` 出现 `version=11.21.1`；Web 界面「添加插件」能读到版本号并开始下载 | ✅ 0.7.1 真机已验证（读出描述与 `版本 0.9.26`） |
 | **F30 插件安装（store）** | 以 dsh 身份 `pnpm store path` 打印 `/vol1/@appshare/dsh/.pnpm-store/v10`；界面「添加插件」不再报 `ERR_PNPM_UNEXPECTED_STORE`，能装完并出现在插件列表 | 写 `$DSH_HOME/.config/pnpm/rc` 的 `store-dir` |
-| **dsh 升到 rc.5** | `grep 'dsh 版本校验通过' ~/build-*.log` 是 `0.2.1-rc.5`；装完首屏、旧会话、工作区都正常，插件列表能打开；顺带复核 F24 的「可访问目录」入口是否还在（dsh 前端改版可能动到路径） | 装 0.7.1 |
-| **dsh 升到 rc.5** | `grep 'dsh 版本校验通过' ~/build-*.log` 是 `0.2.1-rc.5`；装完首屏、旧会话、工作区都正常，插件列表能打开；顺带复核 F24 的「可访问目录」入口是否还在（dsh 前端改版可能动到路径） | 装 0.7.1 |
+| **F31 升级快照** | 装 0.7.2 时 `grep 'upgrade_init: backup' /var/apps/dsh/var/info.log` 出现 `backup: ok …/backups/pre-upgrade-0.7.1-to-0.7.2-*.tar.gz`；`ls /vol1/@appdata/dsh/backups/` 有该文件，`tar -tzf` 首行是 `.dsh-home/` | 装 0.7.2（升级动作本身） |
+| **F32 凭据判据** | 同一次升级出现 `upgrade_callback: home: /vol1/@appshare/dsh/workspace/.dsh-home` 与 `credentials: kept`（或「无 .credentials.yaml，但已有会话」），不再是 `absent (首次安装…)` | 装 0.7.2 |
+| **F33 令牌打码** | `grep -c '"token":"[A-Za-z0-9_-]\{20,\}' /var/apps/dsh/var/info.log` 在**新产生的**行里为 0（老行仍在，属正常） | 装 0.7.2 后启动一次 |
+| **F34 var 归一** | 手工 `bash /var/apps/dsh/cmd/main start` 后 `ls -l /vol1/@appdata/dsh/dsh.pid` 存在，且 `/var/apps/dsh/var/dsh.pid` 不出现 | 装 0.7.2（可选，风险操作） |
+| **dsh 升到 rc.5** | `grep 'dsh 版本校验通过' ~/build-*.log` 是 `0.2.1-rc.5`；装完首屏、旧会话、工作区都正常，插件列表能打开；顺带复核 F24 的「可访问目录」入口是否还在（dsh 前端改版可能动到路径） | 装 0.7.2 |
 | **F22 默认工作区** | 工作区下拉里出现「默认工作区」且处于勾选态；`grep XDG_DOCUMENTS_DIR /vol1/@appshare/dsh/workspace/.dsh-home/.config/user-dirs.dirs` 指向共享目录；原 `Project` 与旧会话仍在 | 0.6.7 已装，等一句确认 |
 | ~~F23 访问权限~~ ✅ | 真机已验证：「访问权限」页出现，`存储空间1/T366的文件/Project` 加成「读写」成功 | 已完成 |
 | **F24 授权目录导航** | 装 0.6.8 后「选择工作区目录」首屏出现「可访问目录」，进去能点到刚授权的文件夹，选中后能建工作区；`ls /vol1/@appshare/dsh/workspace/.dsh-home/可访问目录` 有对应软链 | 装 0.6.8 |
@@ -1215,6 +1223,137 @@ su -s /bin/sh dsh -c "cd / && HOME='$H' PATH=/var/apps/dsh/target/runtime/node/b
 **备选（只有当 dsh 对旧 store 无写权限时）**：那才需要迁移 —— 把 `node_modules` 改名挪开，
 以 dsh 身份在新 store 下 `pnpm install` 一次。要点三条：先挪开（否则 pnpm 仍报同一错误）、
 必须切到 dsh 用户（否则属主变 root，F26 老坑）、装完核对 `.modules.yaml` 的 `storeDir`。
+
+
+### F31 升级前的数据快照一次都没跑过：备份的是 0.2.0 之前的老路径 ⚠️（0.7.2 修复，待真机验证）
+
+**发现方式**（2026-11-01 复盘 807 行 `info.log`）：全文 `grep -c backup` = **0**，
+而这段历史里有 **7 次 `upgrade_init`**（0.6.1→0.6.2 … 0.6.9→0.7.1）。
+
+**根因**：`cmd/upgrade_init` 里写死 `DSH_HOME="$PKGVAR/dsh-home"`，随后
+`if [ -d "$DSH_HOME" ]` 包住整段备份。0.2.0 起数据已经搬到
+`<共享目录>/.dsh-home`（P6），`@appdata/dsh/dsh-home` 早就不存在 —— 条件恒假，
+**整段静默跳过**，连一行 WARN 都没有。PLAN §7 写的「快照失败就中止升级」
+因此在实现里等于不存在：7 次升级都是在没有退路的情况下做的。
+
+**为什么危险**：`upgrade_callback` 里确实有「新运行时就位失败 → 回滚 `.old`」的兜底，
+但那只护程序，不护数据。数据一旦在这次升级里出问题（SQLite 代数变化、profile
+被 pnpm 改坏），没有快照就只能认。
+
+**修法（0.7.2）**：
+
+1. 路径改由 `cmd/lib-home` 统一解析（与 `main`、`install_callback` 同一份），
+   不再各处硬编码；
+2. 快照落到 `$PKGVAR/backups/pre-upgrade-<旧版本>-to-<新版本>-<时间>.tar.gz`，
+   **包内保留 `.dsh-home/` 这一层**，恢复时 `tar -xzf … -C <共享目录>` 即可；
+3. 只留最近 2 份（每份是整份会话+插件，`profiles/*/node_modules` 可能上百 MB，
+   不轮转会把共享目录吃掉一块）；
+4. tar `rc≥2`（磁盘满/权限/路径不存在）→ **硬失败中止升级**，数据不动；
+   `rc=1`（打包期间有文件变化）→ WARN 放行，但留痕。停机之后理论上不该出现 1，
+   不为了一个临时文件把用户卡死；
+5. 目录不存在时也写一行日志，不再静默：
+   `backup: 跳过——<路径> 不存在（首次安装，或数据目录尚未建立）`。
+
+**验收判据**（下次升级时看 `info.log`）：
+
+```bash
+grep -E 'upgrade_init: (backup|home)' /var/apps/dsh/var/info.log | tail -n 5
+ls -lh /vol1/@appdata/dsh/backups/          # 应有 pre-upgrade-0.7.2-to-0.7.x-*.tar.gz
+tar -tzf /vol1/@appdata/dsh/backups/pre-upgrade-*.tar.gz | head   # 首行应为 .dsh-home/
+```
+
+本地已用假数据跑通：备份/轮转/跳过三条分支都验过（`.tmp/t-home.sh`），
+并确认包内有 `.dsh-home/sessions/…`、`.credentials.yaml`、`storages/workspace.json`。
+
+
+### F32 凭据检查永远打印 `credentials: absent`：同一个路径写错 ⚠️（0.7.2 修复，待真机验证）
+
+**现象**：7 次升级，7 次 `upgrade_callback: credentials: absent (首次安装或已清除)`——
+但用户一直正常在用 dsh，会话、插件都在。
+
+**根因**：`cmd/upgrade_callback` 查的是 `$PKGVAR/dsh-home/.credentials.yaml`，
+和 F31 是同一个失效路径。
+
+**危害不在功能，在判据**：这行日志是「升级保住了 cookie 签名密钥，已配对设备不用
+重新登录」的唯一证据。它恒为 absent，等于这条验收**永远无法证伪**——真丢了密钥
+也看不出来，只能等用户抱怨要重新配对。
+
+**修法（0.7.2）**：按真实数据目录判断，并把三种情形分开写：
+
+| 情形 | 日志 | 含义 |
+|---|---|---|
+| `.credentials.yaml` 在 | `credentials: kept（cookie 签名密钥还在…）` | 已配对设备无需重新配对 |
+| 无该文件，但有 `sessions/` 或 `storages/workspace.json` | `credentials: 无 .credentials.yaml，但数据目录里已有会话/工作区…` | 正常：key 是在 dsh 界面里配的，或走匿名身份 |
+| 目录空/不存在 | `credentials: absent（<路径> 尚未初始化，属正常首装）` | 真·首装 |
+
+同一条日志里还会打印解析出的 `home: <路径>`，以后再写错路径一眼就能看出来。
+
+
+### F33 启动日志明文写入完整登录令牌，而这份日志正是要发出去排障的那份 ⚠️（0.7.2 已修）
+
+**发现方式**：分析 `info.log` 时注意到，把这份文件发给开发者，就等于把**当时仍然有效**
+的入口令牌一起发了出去（该轮 `dsh` 进程还在跑，令牌没过期）。
+
+**两个泄漏点**：
+
+1. `cmd/main` 的 `start: state=…`：只对 URL 里的 `token=` 做了打码，
+   **JSON 顶层的 `"token":"<40 位>"` 原样保留** —— 一行里同一个令牌出现两次，
+   打掉一处没用。全文共 **23 个唯一令牌**。
+2. `dsh` 自己打印的 `dsh web: http://…:3081/?token=<40 位>`：由 `spawn_bg` 的
+   `>>"$LOGFILE" 2>&1` 直接追加，**我们控制不了**（24 个唯一令牌）。
+
+再叠加一层：`info.log` 轮转阈值 5 MB，实测 72 KB / 5 天 → 约 300 天才轮转一次，
+历史令牌长期留存（重启后旧令牌失效，所以真正危险的是**最后那一行**）。
+
+**修法（0.7.2）**：`start: state=` 加第二条规则
+`s#("token": *")[A-Za-z0-9_-]+#\1***#g`，两条正则一起打。已用真实 state 串验证：
+
+```
+before: {"url":"…?token=1WFc…","token":"1WFc…","host":…}
+after : {"url":"…?token=***","token":"***","host":…}
+```
+
+**没修的部分**：`dsh web:` 那一行。改它要动 `spawn_bg` 的输出管道
+（`exec > >(sed -u …)`），而 `spawn_bg` 的 pid 记录、进程组回收全靠现在这条
+`exec` 链——为了脱敏去动启动路径不划算（F18 就是这类改动翻车的）。
+因此改为**文档约束**：RUNBOOK 第 7 步加了脱敏命令，外发前必须过滤。
+
+**判据**：新包启动后 `grep -c '"token":"[A-Za-z0-9_-]\{20,\}' info.log` 应为 0；
+`grep -c 'token=[A-Za-z0-9_-]\{20,\}' info.log` 仍会命中 `dsh web:` 那行，属已知残留。
+
+
+### F34 手工启动会算出第二个 var 目录：两套 pidfile 谁也杀不掉谁，3080 被占 2 小时 20 分 ⚠️（0.7.2 已修）
+
+**现场**（2026-10-27，`info.log` 120–167 行）：
+
+```
+21:13:31 start: cwd=/var/apps/dsh/cmd/../shares/workspace … home=/var/apps/dsh/cmd/../shares/workspace/.dsh-home
+21:13:31 launcher: listening on http://192.168.0.114:3080 (state=/var/apps/dsh/cmd/../var/launcher.json)
+21:31:09 stop(launcher): no pidfile, nothing to do          ← 平台这套看的是另一个 var
+21:31:14 launcher: listen failed: EADDRINUSE 192.168.0.114:3080
+22:07:16 launcher: listen failed: EADDRINUSE 192.168.0.114:3080
+23:33:04 launcher: SIGTERM received, closing                ← 手工那个终于被停掉
+```
+
+**根因**：`PKGVAR="${TRIM_PKGVAR:-$SELF_DIR/../var}"`。应用中心调用时 `TRIM_PKGVAR`
+是 `/vol1/@appdata/dsh`；手工从 `/var/apps/dsh/cmd` 调用时没有这个变量，于是
+`mkdir -p` 在**应用目录里**造出一个真的 `var/`，pidfile 与 `launcher.json` 全写在那。
+两边各自 `stop` 都只看到自己那套，手工起的跳转器成了孤儿。
+
+**为什么现在才暴露**：0.6.0 之后所有启动都由应用中心发起（`TRIM_PKGVAR` 恒有），
+所以没再复现；但根因一直在，任何一次「手工 `cmd/main start` 排障」都会重演。
+
+**修法（0.7.2）**：`TRIM_PKGVAR` 缺省时按平台布局归一 —— 把
+`TRIM_APPDEST`（缺省 `$SELF_DIR/../target`，先 `readlink -f`）里的
+`/@appcenter/` 换成 `/@appdata/`。实测：
+
+```
+/vol1/@appcenter/dsh          -> /vol1/@appdata/dsh
+/var/apps/dsh/target (软链)   -> /vol1/@appdata/dsh
+```
+
+**判据**：手工 `bash /var/apps/dsh/cmd/main start` 后，
+`ls -l /vol1/@appdata/dsh/dsh.pid` 应存在，且 `/var/apps/dsh/var/dsh.pid` **不**出现。
 
 
 ---

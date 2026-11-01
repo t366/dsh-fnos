@@ -1,0 +1,48 @@
+#!/bin/bash
+# lib-home — 解析 dsh 数据目录（DSH_HOME）的唯一实现。
+#
+# 为什么单独成文件：这段推导以前在 main 和 install_callback 里各写一份，
+# upgrade_init / upgrade_callback 又各自硬编码 "$PKGVAR/dsh-home"。0.2.0 把
+# 数据搬到「共享目录/.dsh-home」之后，升级链路里那两处没跟着改，于是：
+#   · 升级前快照整段 `[ -d "$DSH_HOME" ]` 恒假，7 次升级 0 条 backup 日志；
+#   · 凭据检查永远打印 credentials: absent，把「不用重新登录」这条验收废掉。
+# （2026-11-01 复盘 info.log 得出，见 docs/ISSUES.md F31 / F32）
+#
+# 契约：只定义函数，不打印、不改环境。调用方自己接结果：
+#   . "$CMD_DIR/lib-home"
+#   DSH_HOME="$(dsh_home_for "$PKGVAR")"
+#
+# 兼容性：纯 bash，不依赖 coreutils 之外的命令；set -u 下也安全。
+
+# 共享目录：TRIM_DATA_SHARE_PATHS 的第一项 → 包内 shares/workspace →
+# 包内 share/workspace → 平台默认路径。找不到就返回空串（不是错误）。
+dsh_share_dir() {
+  local s p base
+  s="${TRIM_DATA_SHARE_PATHS:-}"
+  # 平台可能给出「路径1:路径2」，只认第一条
+  s="${s%%:*}"
+  if [ -z "$s" ] || [ ! -d "$s" ]; then
+    s=""
+    base="${CMD_DIR:-${SELF_DIR:-}}"
+    if [ -z "$base" ]; then
+      base="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+    fi
+    for p in "$base/../shares/workspace" "$base/../share/workspace" \
+             "/var/apps/${APPNAME:-dsh}/shares/workspace"; do
+      if [ -d "$p" ]; then s="$p"; break; fi
+    done
+  fi
+  printf '%s' "$s"
+}
+
+# 数据目录：共享目录下 .dsh-home（跨卸载存活，实测 @appdata 会被连根删）；
+# 没有共享目录才退回 <PKGVAR>/dsh-home（会随卸载消失，只能当兜底）。
+dsh_home_for() { # $1=PKGVAR（必填）
+  local share
+  share="$(dsh_share_dir)"
+  if [ -n "$share" ]; then
+    printf '%s/.dsh-home' "$share"
+  else
+    printf '%s/dsh-home' "${1:?dsh_home_for: 需要 PKGVAR}"
+  fi
+}

@@ -47,10 +47,20 @@ if [ ! -f "$SETTINGS" ]; then
 fi
 
 # ---- 3. 凭据仍在？（保住 .credentials.yaml 用户就不用重新登录）----
-if [ -f "$PKGVAR/dsh-home/.credentials.yaml" ]; then
-  log "credentials: kept"
+# 路径必须跟 main 一致：0.2.0 起数据在「共享目录/.dsh-home」，这里以前查的是
+# $PKGVAR/dsh-home，于是 7 次升级全部打印 credentials: absent —— 假阴性，
+# 让「升级后不用重新登录」这条验收永远无法证伪（见 ISSUES F32）。
+. "$CMD_DIR/lib-home" || fail "安装包不完整：缺少 cmd/lib-home，无法定位数据目录。"
+DSH_HOME="$(dsh_home_for "$PKGVAR")"
+log "home: $DSH_HOME"
+if [ -f "$DSH_HOME/.credentials.yaml" ]; then
+  log "credentials: kept（cookie 签名密钥还在，已配对设备无需重新配对）"
+elif [ -d "$DSH_HOME/sessions" ] || [ -f "$DSH_HOME/storages/workspace.json" ]; then
+  # 没有 .credentials.yaml 不代表数据丢了：API Key 也可以在 dsh 界面里配。
+  # 以前这句一律写成「首次安装或已清除」，排查时非常误导。
+  log "credentials: 无 .credentials.yaml，但数据目录里已有会话/工作区（不是在界面里配的就是走匿名身份）"
 else
-  log "credentials: absent (首次安装或已清除)"
+  log "credentials: absent（$DSH_HOME 尚未初始化，属正常首装）"
 fi
 
 # ---- 4. 冒烟 ----

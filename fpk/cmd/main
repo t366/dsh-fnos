@@ -26,27 +26,32 @@ DSH_USER="${TRIM_USERNAME:-dsh}"
 
 # ---- 路径（一律从 TRIM_* 派生；缺省值只用于本机调试） ----
 APPDEST="${TRIM_APPDEST:-$SELF_DIR/../target}"
-PKGVAR="${TRIM_PKGVAR:-$SELF_DIR/../var}"
+
+# PKGVAR 必须对两个入口算出同一个目录。平台调用时 TRIM_PKGVAR 是权威值；
+# 手工从 /var/apps/dsh/cmd 跑时它不存在，旧代码会落到 /var/apps/dsh/var ——
+# 而应用中心那套用的是 /vol1/@appdata/dsh，于是同一台机器上并存两套
+# pidfile / launcher.json，谁也没杀掉谁：2026-10-27 21:13 手工启动的跳转器
+# 一直占着 3080，21:31 与 22:07 两次 start 都撞 EADDRINUSE，直到 23:33 才停。
+# 现在缺省值按平台布局归一（@appcenter → @appdata），两边指向同一个 var。
+if [ -n "${TRIM_PKGVAR:-}" ]; then
+  PKGVAR="$TRIM_PKGVAR"
+else
+  _apd="$(readlink -f "${TRIM_APPDEST:-$SELF_DIR/../target}" 2>/dev/null)"
+  case "${_apd:-}" in
+    */@appcenter/*) PKGVAR="${_apd%%/@appcenter/*}/@appdata/$APPNAME" ;;
+    *) PKGVAR="$SELF_DIR/../var" ;;
+  esac
+  unset _apd
+fi
 PKGETC="${TRIM_PKGETC:-$SELF_DIR/../etc}"
 
 RUNTIME="$APPDEST/runtime"
 
 # dsh-home 放在共享目录里，卸载重装才不丢会话与凭据（实测 @appdata 会被连根删掉）。
-# 与 install_callback 用同一套推导顺序，两处改一处就得改另一处。
-_share="${TRIM_DATA_SHARE_PATHS:-}"
-_share="${_share%%:*}"
-if [ -z "$_share" ] || [ ! -d "$_share" ]; then
-  for _p in "$SELF_DIR/../shares/workspace" "$SELF_DIR/../share/workspace" \
-            "/var/apps/$APPNAME/shares/workspace"; do
-    [ -d "$_p" ] && { _share="$_p"; break; }
-  done
-fi
-if [ -n "$_share" ]; then
-  DSH_HOME="$_share/.dsh-home"
-else
-  DSH_HOME="$PKGVAR/dsh-home"
-fi
-unset _share _p
+# 推导只在 cmd/lib-home 里留一份：以前 main 与 install_callback 各写一遍，
+# 升级链路又各自硬编码旧路径，结果快照与凭据检查全在看一个不存在的目录。
+. "$SELF_DIR/lib-home" || { echo "安装包不完整：缺少 cmd/lib-home" >&2; exit 1; }
+DSH_HOME="$(dsh_home_for "$PKGVAR")"
 
 # dsh 的默认工作区固定在 <系统文档目录>/deepseek-harness/default-workspace（见 F22）。
 # 文档目录在 linux 上由 xdg-user-dir 读 $HOME/.config/user-dirs.dirs 得到。
@@ -936,7 +941,13 @@ do_start() {
       log "WARN: 本次启动未从日志抓到 token URL，请在 $LOGFILE 里手工查找 token="
     fi
     write_state "$bind"
-    log "start: state=$(sed -E 's#(token=)[A-Za-z0-9_-]+#\1***#g' "$STATEFILE" 2>/dev/null)"
+    # state 是 JSON：token 有两个位置，url 里是 `?token=`，顶层是 `"token":"…"`。
+    # 以前只打第一种，于是每次启动都把完整令牌明文写进 info.log（实测 23 个
+    # 唯一令牌），而 info.log 是用户会下载、发给我们排障的那份文件 —— 等于把
+    # 当前可用的登录令牌一起发出去。两条规则都要有，且只留前 4 位便于对时。
+    log "start: state=$(sed -E -e 's#(token=)[A-Za-z0-9_-]+#\1***#g' \
+                             -e 's#("token": *")[A-Za-z0-9_-]+#\1***#g' \
+                             "$STATEFILE" 2>/dev/null)"
   fi
 
   log "start: ok pid=$pid pgid=$pgid"

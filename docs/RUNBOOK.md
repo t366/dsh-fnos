@@ -88,7 +88,7 @@ pnpm 自检通过：10.34.9（app/runtime/pnpm 23M）
 npm 自检通过：11.21.1（app/runtime/npm 20M）
 端到端自检通过：pnpm view lodash version -> 4.18.1
 app/ 文件数：6.6 万左右
-产物：./dsh.fpk（约 208M，版本 0.7.1）
+产物：./dsh.fpk（约 208M，版本 0.7.2）
 ```
 
 - **`dsh 版本校验通过：0.2.1-rc.5` 必须是 rc.5**：这行是回读装进来的 `package.json` 得到的，
@@ -188,7 +188,6 @@ curl -s -o /dev/null -w 'loop=%{http_code}\n' http://127.0.0.1:3080/healthz
 ```
 
 判据只看两条：**版本号变了** 且 **进程启动时间晚于 `server.mjs` 的 mtime**。
-满足即升级成功——比查 `upgrade_init` 日志可靠（我们的钩子是空实现，平台也不记录，那行永远是空的）。
 
 | 现象 | 含义 | 下一步 |
 |---|---|---|
@@ -196,6 +195,34 @@ curl -s -o /dev/null -w 'loop=%{http_code}\n' http://127.0.0.1:3080/healthz
 | 版本没变、mtime 没变 | 平台静默跳过 | 走 4.2 卸载+安装，**数据不丢** |
 | 版本变了但进程没重启（`lstart` 早于 mtime） | 跑的还是旧代码 | `appcenter-cli stop dsh && appcenter-cli start dsh` |
 | 安装直接报错 | 包本身有问题（图标规格、manifest 字段） | 保留当前版本继续跑，先排查包 |
+
+### 4.1.1　升级钩子的三行判据（0.7.2 起必看）
+
+0.6.0 之后 `upgrade_init/callback` 不再是空实现，日志里能直接看到升级做了什么。
+0.7.2 起有三行是**验收项**，缺任何一行都说明对应环节没跑：
+
+```bash
+grep -E 'upgrade_(init|callback): (home|backup|credentials)' /var/apps/dsh/var/info.log | tail -n 6
+```
+
+| 期望行 | 含义 | 缺了说明 |
+|---|---|---|
+| `backup: ok …/backups/pre-upgrade-<旧>-to-<新>-<时间>.tar.gz (xxM)` | 升级前快照已落盘 | 0.7.2 之前这是**静默跳过**的（F31）；0.7.2 起失败会直接中止升级 |
+| `home: /vol1/@appshare/dsh/workspace/.dsh-home` | 钩子解析到的数据目录 | 路径不对 → 快照与凭据检查都在看别处（F31/F32 的根因） |
+| `credentials: kept（cookie 签名密钥还在…）` | 已配对设备不用重新配对 | 写成 `absent` 而用户明明在用 → 路径又错了 |
+
+快照只留最近 2 份，随时可以这样确认与恢复：
+
+```bash
+ls -lh /vol1/@appdata/dsh/backups/
+tar -tzf /vol1/@appdata/dsh/backups/pre-upgrade-*.tar.gz | head   # 首行应为 .dsh-home/
+
+# 真要回滚数据（先停应用）：
+appcenter-cli stop dsh
+tar -xzf /vol1/@appdata/dsh/backups/pre-upgrade-<旧>-to-<新>-<时间>.tar.gz \
+    -C /vol1/@appshare/dsh/workspace
+appcenter-cli start dsh
+```
 
 ### 4.2　兜底：卸载（选保留）→ 安装
 
@@ -519,27 +546,57 @@ dsh 的 cookie **跨重启仍有效**（200）。所以「302 把令牌写进 `L
 
 ---
 
-## 第 7 步　把三份日志发回来
+## 第 7 步　把日志发回来
 
 ```bash
 ls -l ~/build-*.log ~/p05.log ~/p07.log
 ```
 
-日志里的令牌已由脚本打码，但发之前顺手过一眼：
+### 7.1　三份日志分别在哪
+
+| 日志 | 位置 | 里面有什么 |
+|---|---|---|
+| 应用日志 | `/var/apps/dsh/var/info.log`（实体 `/vol1/@appdata/dsh/info.log`，>5MB 轮转到 `.1`） | 钩子日志 + launcher + **dsh 本体的 stdout/stderr**；启停失败、插件安装报错都在这 |
+| 插件安装 | `.dsh-home/.npm/_logs/*debug-0.log`（`$H` 见下） | pnpm 转发给 npm 之后的完整堆栈 |
+| 打包 | `~/build-<版本>.log`、`/tmp/dsh-npm-*.log` | 只在构建机上 |
+
+dsh 自己不写文本日志：会话记录在 `$H/sessions/`，界面「导出会话」生成的
+`dsh-session-session-<uuid>.zip` 落到浏览器下载目录，不是 NAS 上的固定路径。
+
+### 7.2　发之前必须脱敏
+
+**`info.log` 里有当前仍然有效的登录令牌**，拿到它就能直接进 dsh。脚本只给探针日志
+打过码，`info.log` 没有（`dsh web: …?token=` 那行由 dsh 子进程直写，我们改不了）：
 
 ```bash
+H=/vol1/@appshare/dsh/workspace/.dsh-home
+sed -E -e 's/(token=)[A-Za-z0-9_-]+/\1***/g' \
+       -e 's/("token": *")[A-Za-z0-9_-]+/\1***/g' \
+       /var/apps/dsh/var/info.log > ~/info.safe.log
 sed -E 's/(token=)[^ &]+/\1***/g' ~/p07.log > ~/p07.safe.log
+
+# 确认没有残留（两条都应为 0）
+grep -c 'token=[A-Za-z0-9_-]\{20,\}' ~/info.safe.log
+grep -c '"token":"[A-Za-z0-9_-]\{20,\}' ~/info.safe.log
 ```
+
+> 0.7.2 起 `start: state=` 那行已经把 JSON 里的 token 也打了码，但 `dsh web:` 那行
+> 永远是明文（子进程 stdout 直写）。所以**不要跳过这一步**。
+> 万一原文件已经外发过，重启一次应用即可让旧令牌失效（每次启动都换新令牌）。
+
 
 ---
 
-## 附：失败时先看这三处
+## 附：失败时先看这几处
 
 ```bash
-tail -n 50 /var/apps/dsh/var/info.log     # 安装、启停、失败原因都在这
+tail -n 50 /var/apps/dsh/var/info.log     # 安装、启停、失败原因、升级钩子都在这
+ls -lh /vol1/@appdata/dsh/backups/        # 升级前快照（0.7.2 起）
 cat /var/apps/dsh/var/launcher.json       # 本轮令牌与绑定地址
-ss -ltnp | grep 308                        # 端口有没有被占
+ss -ltnp | grep 308                       # 端口有没有被占
 ```
+
+> `info.log` 和 `launcher.json` **都含当前有效的登录令牌**。贴到对话里之前先按 7.2 脱敏。
 
 ## 附：`EADDRINUSE 3080` / `appcenter-cli start` 报 10330
 

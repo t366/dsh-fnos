@@ -147,7 +147,7 @@ fi
 step "检查必需文件"
 for f in manifest ICON.PNG ICON_256.PNG config/privilege config/resource \
          app/ui/config app/ui/images/icon_64.png app/ui/images/icon_256.png \
-         cmd/main cmd/ensure-default-workspace.mjs wizard/install; do
+         cmd/main cmd/lib-home cmd/ensure-default-workspace.mjs wizard/install; do
   [ -e "$f" ] || die "缺少必需文件：$f"
 done
 say "ok"

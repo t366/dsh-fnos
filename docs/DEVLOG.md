@@ -932,3 +932,82 @@ $ du -sh .../.dsh-home/.local/share/pnpm/store/*
 
 顺带定下配置的落点：写 pnpm 自己的全局配置 `$HOME/.config/pnpm/rc`，而不是 `.npmrc` ——
 后者会被 npm 也读一遍，等于给 `pnpm view`（内部转发给 npm）凭空加一条它不认识的键。
+
+---
+
+## 阶段 29（2026-11-01 17:45）　把 info.log 当数据读了一遍：升级没有退路，令牌在裸奔（包 0.7.2）
+
+### 29.1　先统计，再下结论
+
+拿到的是 5 天完整 `info.log`（808 行，0.1.1 → 0.7.1）。先跑一遍计数，比逐行读更能看出
+「什么没发生」：
+
+| 指标 | 值 | 说明 |
+|---|---|---|
+| `start: ok` | 26 | 正常 |
+| `stop … FAILED` | 0 | 进程回收这一层是干净的（F18 之后没再翻车） |
+| `WARN` | 0 | —— |
+| `install_callback: begin` | 14 | 每次「覆盖升级」实际走的还是卸载+安装 |
+| `upgrade_init: begin` | 7 | |
+| **`backup`** | **0** | 7 次升级，一次快照都没有（F31） |
+| **`credentials: absent`** | **7** | 7 次全是 absent（F32） |
+| `start: state` 里的唯一令牌 | 23 | 全部明文（F33） |
+| `dsh web: …?token=` 唯一令牌 | 24 | 全部明文，且我们管不了（F33） |
+| `EADDRINUSE` | 5 | 全发生在 0.5.0，且是同一小时的连环（F34） |
+
+**「0 次」比「失败」更有信息量**。备份失败会写 WARN，而这里是连尝试都没发生——
+条件判断直接把整段吃掉了，日志上看不出任何异常。这类缺陷翻日志翻不出来，
+只能靠「本该出现的行没出现」来发现。
+
+### 29.2　四处问题的共同点：都是「走错路径 + 没有反证」
+
+F31 与 F32 是同一行 `DSH_HOME="$PKGVAR/dsh-home"` 的两个副本。0.2.0 把数据搬到
+共享目录时，`main` 和 `install_callback` 改了，两个 upgrade 钩子没改。代码里当时还留着
+一句注释「与 install_callback 用同一套推导顺序，两处改一处就得改另一处」——
+**靠注释维持一致性，就等于没有一致性**。
+
+所以这次顺手把它单点化：新增 `cmd/lib-home`，只导出两个函数
+（`dsh_share_dir` / `dsh_home_for`），`main`、`install_callback`、`upgrade_init`、
+`upgrade_callback` 全部改为 source 它。`build.sh` 的必需文件清单加上这个文件，
+缺了直接打包失败——比运行时报错早得多。
+
+F34 是同一个病：`PKGVAR` 的缺省值依赖「是谁在调用」，两个入口算出两个目录。
+这次按平台布局归一（`@appcenter → @appdata`），手工启动与应用中心落到同一个 `var/`。
+
+### 29.3　两处「只能修一半」的取舍
+
+**快照做硬失败**。`tar` 返回 ≥2 就中止升级。理由是：升级失败可以重试，数据没了不能。
+用一个可能卡住升级的判据换「永远回得去」，这笔账划算。`rc=1`（打包期间文件变化）
+只 WARN，因为停机后理论上不该出现，不值得为它卡死用户。
+
+**令牌只修我们打印的那半行**。`dsh web: …?token=` 是子进程 stdout 直写的，
+要脱敏就得在 `spawn_bg` 那条 `exec` 链里插管道（`exec > >(sed -u …)`）。
+而 F18 的教训正是「动启动路径的进程编排会连带弄坏 pid 记录与进程组回收」——
+为了美观去动它不值。所以改成文档约束：RUNBOOK 第 7 步给出脱敏命令，
+并写明「info.log 里有当前有效的登录令牌」。**已知残留要写清楚，而不是假装修完了。**
+
+### 29.4　改了什么
+
+| 位置 | 改动 |
+|---|---|
+| `fpk/cmd/lib-home` | **新增**：数据目录解析的唯一实现（共享目录 → `.dsh-home`） |
+| `fpk/cmd/main` | source lib-home；`PKGVAR` 缺省值归一；`start: state=` 两条正则都打码 |
+| `fpk/cmd/install_callback` | 删掉自带的 `resolve_share()`，改用 lib-home（保留 000 自愈与可写判定） |
+| `fpk/cmd/upgrade_init` | 快照按真实数据目录打包 → `var/backups/`、留 2 份、tar≥2 硬失败、跳过也留痕 |
+| `fpk/cmd/upgrade_callback` | 凭据按真实目录三态判定；打印 `home:` |
+| `fpk/manifest` | 0.7.1 → **0.7.2**，changelog 前插一条 |
+| `fpk/build.sh` | 必需文件清单加 `cmd/lib-home` |
+| `docs/ISSUES.md` | 新增 F31–F34（含判据） |
+| `docs/RUNBOOK.md` | 日志位置与脱敏、升级后查快照 |
+
+### 29.5　本地验了什么
+
+- `bash -n` 五个脚本全过；
+- `.tmp/t-home.sh`：假共享目录 + 假数据 → 快照落盘、包内是 `.dsh-home/…`、
+  预置 3 份旧快照后轮转只剩 2 份、目录不存在时写「跳过」而不是静默；
+- 令牌打码用真实 state 串验证：`"token":"***"` 与 `token=***` 同时生效；
+- `PKGVAR` 归一：`/vol1/@appcenter/dsh → /vol1/@appdata/dsh`、`/vol2` 同理；
+- `fpk/selftest.sh`：**通过 59 / 跳过 26 / 失败 0**（与改动前一致）。
+
+真机上要看的只有三行：`upgrade_init: backup: ok …`、`upgrade_callback: home: …`、
+`credentials: kept`。三行都有，这四个问题才算真的关掉。
