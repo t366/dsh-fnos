@@ -85,15 +85,22 @@ bash build.sh full 2>&1 | tee ~/build-$(grep -E '^version' manifest | cut -d'"' 
 跳过 0 / 失败 0
 dsh 版本校验通过：0.2.1-rc.3
 pnpm 自检通过：10.34.9（app/runtime/pnpm 19M）
-app/ 文件数：6.3 万左右
-产物：./dsh.fpk（约 205M，版本 0.6.9）
+npm 自检通过：11.21.1（app/runtime/npm 17M）
+端到端自检通过：pnpm view lodash version -> 4.18.1
+app/ 文件数：6.6 万左右
+产物：./dsh.fpk（约 208M，版本 0.7.0）
 ```
 
 - Linux 上「跳过」必须是 **0**。开发机（Windows）上的 26 项跳过是权限位、`/proc`、
   进程组这些只能在真机判定的断言，这里会真正执行。
 - **通过数只作参考**（每加一条断言就会变），真正的判据是 **`跳过 0 / 失败 0`**。
-- **`pnpm 自检通过` 必须出现**（0.6.9 起）：它证明 pnpm 装进了 runtime 且 wrapper 能跑。
-  若在这里 `die`，说明 npm 装 pnpm 失败，先看 `/tmp/dsh-npm-pnpm.log`。
+- **`pnpm 自检通过` 与 `npm 自检通过` 都必须出现**（0.7.0 起）：前者证明 pnpm 装进了 runtime
+  且 wrapper 能跑，后者证明 pnpm 转发时的目标也备齐了。分别 `die` 时看
+  `/tmp/dsh-npm-pnpm.log` 与 `/tmp/dsh-npm-npm.log`。
+- **`端到端自检通过：pnpm view …` 是最关键的一行**（0.7.0 起）：它真的执行了用户在界面上
+  点「安装」时的那条命令（pnpm 会把 `view` 转发给 npm）。这行 `die` 说明两个包管理器串不起来，
+  0.6.9 的 F29 就是这样漏到真机的 —— 两个包都在、各自都能跑，唯独中间的转发是坏的。
+  没有外网时可用 `DSH_SKIP_NETCHECK=1` 跳过，但那样这层保障就没了。
 - `== 版本 ==` 那行必须读到已装版本，形如
   `已安装：0.6.8（读自 /vol1/@appcenter/dsh/manifest）`。**若显示 `<无>`，先别继续**：
   那是 F20 的现场（守卫会空转），先按 F20 的候选路径确认包到底在哪。
@@ -102,8 +109,8 @@ app/ 文件数：6.3 万左右
   ——自测已经把它隔离在沙箱外，不影响结论。
 - 自测失败时看它列出的「失败项」；确认与本次改动无关才用 `DSH_SKIP_SELFTEST=1` 跳过，
   不要因为想快点过而跳过。
-- npm 装不上时先看 `/tmp/dsh-npm-install.log`（dsh）与 `/tmp/dsh-npm-pnpm.log`（pnpm），
-  再确认 registry 能不能连外网。
+- npm 装不上时先看 `/tmp/dsh-npm-install.log`（dsh）、`/tmp/dsh-npm-pnpm.log`（pnpm）、
+  `/tmp/dsh-npm-npm.log`（npm），再确认 registry 能不能连外网。
 
 ---
 
@@ -399,21 +406,41 @@ mode `700` —— 这四样正是 dsh 首次启动会在 `$HOME` 下建的东西
 > 别用应用启动脚本去自动 `chown` 用户文件：那既越界，又会把 FNOS 的 ACL 冲掉。
 > 应用只负责**说清楚**是权限问题，修数据是用户/管理员的事。
 
-### 5.6　插件能不能装（0.6.9 起，F28）
+### 5.6　插件能不能装（0.7.0 起，F28 + F29）
 
-**先看启动日志有没有把 pnpm 交给 dsh**：
+**先看启动日志有没有把两个包管理器都交给 dsh**：
 
 ```bash
-grep 'start: pnpm=' /var/apps/dsh/var/info.log | tail -n 2
+grep -E 'start: (pnpm|npm)=' /var/apps/dsh/var/info.log | tail -n 4
 ```
 
-期望（0.6.9）：
+期望（0.7.0，两条都要有）：
 
 ```
 … start: pnpm=/var/apps/dsh/target/runtime/node/bin/pnpm version=10.34.9（已前置到 PATH）
+… start: npm=/var/apps/dsh/target/runtime/node/bin/npm version=11.21.1（pnpm 的 view/add 转发目标）
 ```
 
-只有 `WARN: 缺少 runtime/node/bin/pnpm` → 装的还是 0.6.8 或更早，装 0.6.9 的包即可。
+只有 `WARN: 缺少 runtime/node/bin/pnpm` → 装的还是 0.6.8 或更早；
+只差 npm 那条（有 `WARN: 缺少 runtime/node/bin/npm`）→ 装的是 0.6.9，
+插件仍会报 `npm error Class extends value undefined`（F29）。两种情况都是「装 0.7.0 的包」。
+
+**再确认两个 wrapper 真能跑**（不必等界面报错）：
+
+```bash
+cd / && PATH=/var/apps/dsh/target/runtime/node/bin:$PATH pnpm --version
+cd / && PATH=/var/apps/dsh/target/runtime/node/bin:$PATH npm --version
+```
+
+分别是 `10.34.9` 与 `11.21.1`。**还要看那条会转发的那步**（这一步才真正验 F29）：
+
+```bash
+cd /tmp && PATH=/var/apps/dsh/target/runtime/node/bin:$PATH \
+  pnpm view lodash version --registry=https://registry.npmmirror.com/ --config.fetch-retries=0
+```
+
+输出 `4.18.1` 一类的版本号就对了；报 `npm error Class extends value undefined` 说明 npm 还是
+系统那份（wrapper 没进 PATH，或包不对）。
 
 **再在界面里试一次**：插件 → 添加插件 → 输入包名（例如 `billion-context`）→ 应能读到版本号
 并开始下载，而不是 `spawn pnpm ENOENT`。
@@ -435,11 +462,29 @@ grep -n '"dependencies"' -A8 /vol1/@appshare/dsh/workspace/.dsh-home/profiles/*/
 
 | 报错 | 含义 | 动作 |
 |---|---|---|
-| `spawn pnpm ENOENT` | 包里没有 pnpm（0.6.8 及更早） | 装 0.6.9 |
+| `spawn pnpm ENOENT` | 包里没有 pnpm（0.6.8 及更早） | 装 0.7.0 |
+| `npm error Class extends value undefined` + `.npm/_logs/…debug-0.log` | pnpm 转发给系统 npm 10.9.3，与自带 node 24 不兼容（F29） | 装 0.7.0；应急见下方 |
 | `ERR_PNPM_FETCH_404` / `404` | 包名或版本不存在 | 核对 npm 上的名字（`curl -s https://registry.npmmirror.com/<名字> \| head -c 200`） |
 | `ETIMEDOUT` / `ENETUNREACH` | NAS 出不了外网 | 换 registry 或给 NAS 配代理 |
 | `EACCES` / `EPERM` | 数据目录写不进去 | 见 5.5；插件目录必须在 `.dsh-home` 下 |
 | `unreviewed build scripts` / `allowBuilds` | pnpm 10 默认禁止依赖跑 install 脚本 | 按提示把包名加进 `<profile>/pnpm-workspace.yaml` 的 `allowBuilds`，再重试 |
+
+**F29 的应急补丁**（不想等 0.7.0 打包，NAS 上以 root 做，30 秒）：
+
+```bash
+R=/var/apps/dsh/target/runtime
+/var/apps/nodejs_v24/target/bin/npm install --prefix "$R/npm" npm@11.21.1
+cat > "$R/node/bin/npm" <<'EOF'
+#!/bin/sh
+here=$(cd "$(dirname "$0")" && pwd)
+exec "$here/node" "$here/../../npm/node_modules/npm/bin/npm-cli.js" "$@"
+EOF
+chmod +x "$R/node/bin/npm"
+cd / && PATH="$R/node/bin:$PATH" pnpm view lodash version --registry=https://registry.npmmirror.com/
+appcenter-cli stop dsh && appcenter-cli start dsh
+```
+
+（注意 wrapper 里是**两级** `../../npm`：`$here` 已经是 `runtime/node/bin`。）
 
 ---
 

@@ -48,7 +48,8 @@
 | F25 | `auth-paths:` 用 root 身份探测，日志写「读写」而 dsh 实际读不了 | 缺陷（假阳性） | ⚠️ | `cmd/main` `probe_as_app()` 切到应用用户 + `sample_unreadable()` 抽查子项；**待装 0.6.8 验证** |
 | F26 | Web 端附件上传全灭：卷目录 000 撞上 dsh 的 fsync-to-root | 缺陷（权限） | ✅ | `chown dsh:dsh` + `chmod o+rx /vol1 /vol1/@appshare`；见正文 |
 | F27 | agent 会话环境三连坑：工作区不可写 / 工具 schema 误导 / 沙箱只读 | 缺陷（环境） | ⚠️ | 坑 1 已结案（走 dsh 授权通道）；坑 2/3 属工具与平台 |
-| F28 | 「添加插件」一律失败：运行时只有 node 二进制，没有 pnpm | 缺陷（打包） | ⚠️ | 0.6.9：`build.sh` 装 pnpm 10.34.9 + `cmd/main` 前置 PATH；**待装包验证** |
+| F28 | 「添加插件」一律失败：运行时只有 node 二进制，没有 pnpm | 缺陷（打包） | ⚠️ | 0.6.9：`build.sh` 装 pnpm 10.34.9 + `cmd/main` 前置 PATH；真机 0.6.9 已消除 `spawn pnpm ENOENT`，但下一环仍报错 → 见 F29 |
+| F29 | 插件信息仍读不出来：pnpm 把 `view` 转发给系统 npm 10.9.3，和自带 node 24 不兼容 | 缺陷（打包/依赖链） | ⚠️ | 0.7.0：运行时成套带 npm 11.21.1（`runtime/npm` + `node/bin/npm` wrapper），打包时把 `pnpm view` 真跑一遍当门禁；**待装 0.7.0 验证** |
 | T1 | 0.5.0 打包与真机安装 | — | ✅ | `probe/05` 33 PASS / 1 WARN / 0 FAIL |
 | T2 | cookie 跨重启 / 令牌是否一次性 | — | ✅ | `probe/07` 10 PASS：令牌可复用、cookie 跨重启存活 |
 | T3 | 端口写死 3080，不可配置 | — | 📋 | 改端口=卸载重装 |
@@ -64,8 +65,8 @@
 
 ## 当前剩余问题（按优先级）
 
-> 截至 2026-10-30 21:45。真机已装 **`0.6.7`**（`0.6.8` 的 F24 / F25 是否已装、结果如何未回报）；
-> **`0.6.9`（F28 插件 pnpm）待打包安装**。
+> 截至 2026-11-01 16:45。真机已装 **`0.6.9`**（F28 的 pnpm 已生效，但插件仍失败 → **F29**）；
+> **`0.7.0`（F29 自带 npm）待打包安装**。
 > 只列**还没关闭**的项；已修缺陷见第二节，平台限制见第一节。
 >
 > **已关闭（最近）**：P0 实例归属、F16 的 root 文件残留、T1 / T2（0.5.0 装机验收）、
@@ -91,7 +92,8 @@
 
 | 项 | 判据 | 前置 |
 |---|---|---|
-| **F28 插件安装** | 装 0.6.9 后 `grep 'start: pnpm=' /var/apps/dsh/var/info.log` 出现 `version=10.34.9（已前置到 PATH）`；Web 界面「添加插件」不再报 `spawn pnpm ENOENT`，能读到版本号并开始下载 | 装 0.6.9 |
+| **F28 插件安装（pnpm）** | 装 0.6.9 后 `grep 'start: pnpm=' /var/apps/dsh/var/info.log` 出现 `version=10.34.9（已前置到 PATH）`；Web 界面「添加插件」不再报 `spawn pnpm ENOENT` | ✅ 0.6.9 真机已验证（ENOENT 消失） |
+| **F29 插件安装（npm）** | 装 0.7.0 后 `grep 'start: npm=' /var/apps/dsh/var/info.log` 出现 `version=11.21.1`；Web 界面「添加插件」能读到版本号并开始下载；`grep -c 'minizlib' /vol1/@appshare/dsh/workspace/.dsh-home/.npm/_logs/*.log` 不再新增 | 装 0.7.0 |
 | **F22 默认工作区** | 工作区下拉里出现「默认工作区」且处于勾选态；`grep XDG_DOCUMENTS_DIR /vol1/@appshare/dsh/workspace/.dsh-home/.config/user-dirs.dirs` 指向共享目录；原 `Project` 与旧会话仍在 | 0.6.7 已装，等一句确认 |
 | ~~F23 访问权限~~ ✅ | 真机已验证：「访问权限」页出现，`存储空间1/T366的文件/Project` 加成「读写」成功 | 已完成 |
 | **F24 授权目录导航** | 装 0.6.8 后「选择工作区目录」首屏出现「可访问目录」，进去能点到刚授权的文件夹，选中后能建工作区；`ls /vol1/@appshare/dsh/workspace/.dsh-home/可访问目录` 有对应软链 | 装 0.6.8 |
@@ -1096,6 +1098,56 @@ appcenter-cli restart dsh
 `…/runtime/node/bin/pnpm version=10.34.9（已前置到 PATH）`；然后在 Web 界面添加插件，
 错误应从「无法获取插件信息」变成能读到版本号并开始下载；装完若列表没变化，重启应用一次
 （插件装进 `.dsh-home` 下的 profile 子目录，重启才会重新加载 bundle）。
+
+### F29 插件信息仍读不出来：pnpm 把 `view` 转发给了系统 npm ⚠️（2026-11-01 修复，待真机验证）
+
+**现象**（0.6.9 真机）：`spawn pnpm ENOENT` 已经消失，但换成另一句：
+
+```console
+无法获取插件信息: npm error Class extends value undefined is not a constructor or null
+npm error A complete log of this run can be found in:
+npm error   /vol1/@appshare/dsh/workspace/.dsh-home/.npm/_logs/2026-11-01T08_28_11_411Z-debug-0.log
+```
+
+注意这里是 `npm error`，日志也落在 `.npm/_logs/` —— **动手的是 npm**。
+
+**排查经过**（每一步都排除了一个方向）：
+
+| 检查 | 结果 | 排除了什么 |
+|---|---|---|
+| `pnpm view dsh-free-search …`（本地同版本 10.34.9 复现） | 正常返回 JSON | pnpm 本身没坏 |
+| npm 调试日志 `verbose cli` | `/vol1/@appcenter/dsh/runtime/node/bin/node /usr/local/bin/npm` | dsh 传的命令/参数原样给了 npm |
+| 在 pnpm wrapper 里打日志 | `argv0=…/runtime/node/bin/pnpm args=view dsh-free-search …` | 我们的 pnpm **确实被执行了**，PATH 前置有效 |
+| `/proc/<dsh pid>/environ` 里的 PATH | `runtime/node/bin` 排第一 | 不是 PATH 没传进去 |
+| profile 的 `package.json` / 全局配置 | 没有 `packageManager`、没有 `npmCommand` | 不是配置把命令改成了 npm |
+| pnpm 源码 `run-npm/lib/index.js` | `const npm = npmPath ?? "npm"` | pnpm 的 `view`/`config` **自己转发给裸命令 npm** |
+
+**根因**：`runtime/node/bin` 里只有 `node` 和 `pnpm`，**没有 npm**。pnpm 转发时按 PATH 找
+`npm`，落到系统那份 `/usr/local/bin/npm`（`npm 10.9.3`，2026-10-08 随系统 node 装的），
+而我们的 wrapper 用 `$here/node`（v24）去跑它 —— npm 10.9 与 node 24 不兼容，
+在 `minizlib` 里 `Class extends value undefined` 直接崩。
+
+一句话：**0.6.9 修好了「找不到 pnpm」，但 pnpm 干活还需要 npm，两个必须成套。**
+
+**修法（0.7.0）**：
+
+| 位置 | 改动 |
+|---|---|
+| `build.sh` | 新增 `DSH_NPM_VERSION=11.21.1`，装进 `app/runtime/npm`，在 `app/runtime/node/bin/npm` 生成同构 wrapper；两条版本自检 + **一条端到端自检**：`cd /tmp && PATH=<runtime>/node/bin:$PATH pnpm view lodash version`，输出必须是版本号 |
+| `cmd/main` | 启动日志增加 `start: npm=… version=…`；缺失时 WARN 并说明会转发给系统 npm |
+| `selftest.sh` | 假 npm + npm wrapper 模板按真实布局跑一遍（两个 heredoc 结束标记同为 `WRAP`，抽取逻辑改为取第一个，否则第二段会被追加进第一个文件）；日志断言按 `start: pnpm=` / `start: npm=` 分别取版本，不再用「最后一个 `version=`」 |
+| `probe/05` | 缺 `runtime/node/bin/npm` 直接 FAIL |
+| `manifest` | `0.7.0` + changelog |
+
+**为什么端到端自检要真跑 `pnpm view`**：前面两条自检只证明「两个 wrapper 各自能跑」，
+证明不了「pnpm 会正确转发到我们这份 npm」。这个 bug 正是这样漏过去的 —— 两个包都在、
+串起来却是坏的。所以判据必须是**失败的那条命令本身**。
+
+**为什么钉 npm 11.21.1**：node 24 发行版自带的就是 npm 11（engines `^20.17.0 || >=22.9.0`，
+与 v24.22.1 相容）；npm 12（latest，`^24.15.0`）虽然也能跑，但刚发布，没必要替 dsh 当小白鼠。
+
+**复现（手工验证「是不是 npm」）**：把 wrapper 换成会失败的一行，同一条命令必须报错 ——
+真机日志里 `verbose cli … /usr/local/bin/npm` 已经是等价证据。
 
 ---
 

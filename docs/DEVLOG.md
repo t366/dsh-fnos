@@ -754,3 +754,65 @@ ERROR: pnpm wrapper 无法运行：Error: Cannot find module
 失败信息直接打印出错的绝对路径；改回后 `55 / 26 / 0`。这一步不能省 —— 一条从没红过的
 断言，和没有断言是一回事（F24 同类问题）。
 
+
+## 阶段 27（2026-11-01 16:45）　pnpm 干活还得靠 npm，而包里没有 npm（F29）
+
+0.6.9 装上真机后 `spawn pnpm ENOENT` 消失了，报错换成：
+
+```console
+无法获取插件信息: npm error Class extends value undefined is not a constructor or null
+npm error   /vol1/@appshare/dsh/workspace/.dsh-home/.npm/_logs/2026-11-01T08_28_11_411Z-debug-0.log
+```
+
+**怎么一步步锁定的**（每步排掉一个方向，剩最后一个就是答案）：
+
+1. 本地用同版本 pnpm 10.34.9 跑完全相同的命令 → 正常返回 JSON。pnpm 没坏。
+2. 读 npm 调试日志 `verbose cli` → `…/runtime/node/bin/node /usr/local/bin/npm`。
+   被执行的程序是**系统 npm**，参数与 dsh 发的一模一样。
+3. 在 pnpm wrapper 里加一行日志 → `argv0=…/runtime/node/bin/pnpm args=view …`。
+   我们的 pnpm **确实跑了**，PATH 前置有效（这一步是分水岭：排除「PATH 没传进去」）。
+4. profile 的 `package.json`、`.npmrc`、`cordis.patch.yml` 里都没有 `packageManager` /
+   `npmCommand`。不是配置改的。
+5. pnpm 源码 `run-npm/lib/index.js`：`const npm = npmPath ?? "npm"` —— `view` / `config`
+   这些子命令 pnpm 自己没实现，**直接 spawn 裸命令 npm 转发**。
+
+合成一句话：`runtime/node/bin` 里只有 `node` 和 `pnpm`，pnpm 转发时按 PATH 找到系统
+`/usr/local/bin/npm`（10.9.3），而 wrapper 用自带 node 24 去跑它 —— npm 10.9 与 node 24
+不兼容，崩在 `minizlib` 的 `Class extends value undefined`。
+
+### 27.1　修法与那条「必须真跑一次」的自检
+
+| 位置 | 改动 |
+|---|---|
+| `build.sh` | 装 `npm@11.21.1` 到 `app/runtime/npm`，生成同构 wrapper `node/bin/npm`；两条版本自检 + **端到端自检** |
+| `cmd/main` | 日志加 `start: npm=… version=…`；缺了 WARN |
+| `selftest.sh` | 假 npm + npm wrapper 模板按真实布局跑；日志断言拆成 pnpm / npm 两条 |
+| `probe/05` | 缺 npm 直接 FAIL |
+
+端到端自检就是用户点的那一下，去掉「界面」只有命令：
+
+```bash
+cd /tmp && PATH="<runtime>/node/bin:$PATH" pnpm view lodash version \
+  --registry=https://registry.npmmirror.com/ --config.fetch-retries=0
+```
+
+输出必须是版本号（已确认 npm 10/11 都认 `--config.fetch-retries=0` 这种写法，
+本地 `npm view lodash version --config.fetch-retries=0` 返回 `4.18.1`）。无外网时
+`DSH_SKIP_NETCHECK=1` 可跳过，但那等于自废这层保障。
+
+**为什么必须是端到端**：前两条自检（pnpm 能跑、npm 能跑）在 0.6.9 上**都是绿的**，
+坏的恰恰是两者之间的转发。判据只有「失败的那条命令本身」才算数。
+
+### 27.2　顺手修的抽取逻辑
+
+`selftest.sh` 里从 build.sh 抽 wrapper 模板的 awk 原本在每个块尾把 `f=0` 继续扫文件；
+现在有了第二个同样的 `<<'WRAP'` 块，第二段会被**追加进第一个 wrapper**（`exec` 在前，
+追加的部分不执行，所以不会报错，只会静默污染）。改成取到第一个 `^WRAP$` 就 `exit`，
+并把 `index($0, pat) == 1` 改成 `> 0` —— build.sh 里这行有缩进，`== 1` 一条都抽不到
+（第一版就是这么红的：`通过 51 / 失败 8`）。
+
+自测最终 `通过 59 / 跳过 26 / 失败 0`（比上一轮 +4：npm 两条、pnpm 一条拆分、多一条模板。
+真机 Linux 上「跳过 0」）。
+
+**没验的**：真机 0.7.0 上 `pnpm add` 能否真的装完（store、registry、磁盘都在 NAS 上）。
+判据在 ISSUES P2 的 F29 那行。
