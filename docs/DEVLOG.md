@@ -816,3 +816,48 @@ cd /tmp && PATH="<runtime>/node/bin:$PATH" pnpm view lodash version \
 
 **没验的**：真机 0.7.0 上 `pnpm add` 能否真的装完（store、registry、磁盘都在 NAS 上）。
 判据在 ISSUES P2 的 F29 那行。
+
+### 27.3　端到端自检第一次红：判据太窄，把成功的构建拦下了
+
+真机 0.7.0 构建跑到端到端那步：
+
+```console
+端到端自检：pnpm view lodash version（会真的走 pnpm → npm 转发）...
+ERROR: pnpm view 走不通（pnpm 会把 view 转发给 npm，两者必须成套）：
+npm warn Unknown cli config "--config.fetch-retries". This will stop working in the next major version of npm.
+4.18.1
+```
+
+**命令是成功的**——`4.18.1` 就在最后一行。我原来的判据是 `case "$VIEW_GOT" in [0-9]*.[0-9]*)`，
+要求整段输出以数字开头；npm 11 往 stderr 打了一行 warn，合并回来（`2>&1`）后第一行就不是数字了，
+于是「成功」被读成「失败」。
+
+修法：**取最后一行像版本号的**，而不是要求整段就是版本号。
+
+```sh
+VIEW_VER="$(printf '%s\n' "$VIEW_GOT" | grep -E '^[0-9]+(\.[0-9]+)+$' | tail -n1 || true)"
+```
+
+两个细节：
+
+- `|| true` 不能省。build.sh 是 `set -euo pipefail`，一条都没匹配上时管道非零，会让脚本
+  在「没有版本号」这个**正确分支**上静默退出，而不是走到 `die` 打印原因。
+- 用**整行锚定**（`^…$`）而不是「包含数字」：报错文本里可能带 `/usr/local/bin/npm 10.9.3`
+  这类片段，宽松匹配会把失败读成成功——那才是最坏的方向。
+
+四种输入都验过：`warn + 4.18.1` → `4.18.1`；只有 `npm error …` → 空（→ die）；
+纯 `4.18.1` → `4.18.1`；`0.9.26` → `0.9.26`。
+
+### 27.4　意外收获：npm 12 会废掉 dsh 传的那个参数
+
+那行 warn 不是噪音，是结论：
+
+```
+npm warn Unknown cli config "--config.fetch-retries". This will stop working in the next major version of npm.
+```
+
+dsh 查包时固定传 `--config.fetch-retries=0`（控制重试次数），npm 12 起这个写法不再被识别。
+所以钉 npm 11.21.1 不再只是「追新有风险」的判断，而是硬约束：**11 是同时满足
+「node 24 兼容」与「认 dsh 参数」的最后一版**。以后要升，先确认 npm 认不认这个参数。
+
+（顺带：pnpm 10.34.9 对同一个参数默默接受，所以真正挑版本的是 npm。）

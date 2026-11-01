@@ -408,10 +408,18 @@ WRAP
     VIEW_GOT="$(cd / && PATH="$PNPM_BIN_DIR:$PATH" \
       pnpm view lodash version --registry=https://registry.npmmirror.com/ \
       --config.fetch-retries=0 2>&1)" || true
-    case "$VIEW_GOT" in
-      [0-9]*.[0-9]*) say "端到端自检通过：pnpm view lodash version -> $VIEW_GOT" ;;
-      *) die "pnpm view 走不通（pnpm 会把 view 转发给 npm，两者必须成套）：$VIEW_GOT" ;;
-    esac
+    # 判据是「拿到了一行版本号」，不是「整段输出就是版本号」：
+    # npm 11 会对 dsh 固定传的 --config.fetch-retries 打一行 warn（走 stderr），
+    # 输出于是变成「warn + 版本号」。按首字符判会误杀——2026-11-01 就这么拦了一次
+    # 明明成功的构建。这里取最后一行「长得像版本号」的，错误输出里不会有这种整行。
+    # 末尾 || true：build.sh 是 set -euo pipefail，grep 一条都没匹配上时管道非零，
+    # 不加就会让脚本在「没有版本号」这个正确分支上静默退出（而不是走到下面的 die）。
+    VIEW_VER="$(printf '%s\n' "$VIEW_GOT" | grep -E '^[0-9]+(\.[0-9]+)+$' | tail -n1 || true)"
+    if [ -n "$VIEW_VER" ]; then
+      say "端到端自检通过：pnpm view lodash version -> $VIEW_VER"
+    else
+      die "pnpm view 走不通（pnpm 会把 view 转发给 npm，两者必须成套）：$VIEW_GOT"
+    fi
   fi
   say "运行时就绪"
 else

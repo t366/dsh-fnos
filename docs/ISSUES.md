@@ -1146,6 +1146,15 @@ npm error   /vol1/@appshare/dsh/workspace/.dsh-home/.npm/_logs/2026-11-01T08_28_
 **为什么钉 npm 11.21.1**：node 24 发行版自带的就是 npm 11（engines `^20.17.0 || >=22.9.0`，
 与 v24.22.1 相容）；npm 12（latest，`^24.15.0`）虽然也能跑，但刚发布，没必要替 dsh 当小白鼠。
 
+后来真机自检又给了个硬理由：npm 11 对 dsh 固定传的 `--config.fetch-retries` 会打一行
+
+```console
+npm warn Unknown cli config "--config.fetch-retries". This will stop working in the next major version of npm.
+```
+
+也就是说**升到 npm 12 后这个参数会失效**（dsh 的可控重试就没了）。11 是目前能同时满足
+「node 24 兼容」与「认 dsh 的参数」的最后一版。
+
 **复现（手工验证「是不是 npm」）**：把 wrapper 换成会失败的一行，同一条命令必须报错 ——
 真机日志里 `verbose cli … /usr/local/bin/npm` 已经是等价证据。
 
