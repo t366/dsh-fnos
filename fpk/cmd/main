@@ -786,8 +786,20 @@ do_start() {
     pnpm_ver="$("$NODE_BIN" -e 'try{process.stdout.write(String(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).version||""))}catch(e){}' \
       "$RUNTIME/pnpm/node_modules/pnpm/package.json" 2>/dev/null || true)"
     log "start: pnpm=$RUNTIME/node/bin/pnpm version=${pnpm_ver:-未知}（已前置到 PATH）"
+
+    # pnpm 的 `view` / `config` 会 spawn 裸命令 "npm" 转发（F29）。只前置 pnpm 而不带
+    # npm 时，这个 npm 会命中系统那份（飞牛自带 10.9.3），被自带 node 24 跑起来就崩在
+    # minizlib，界面显示成「无法获取插件信息：npm error Class extends value undefined」。
+    if [ -x "$RUNTIME/node/bin/npm" ]; then
+      local npm_ver=""
+      npm_ver="$("$NODE_BIN" -e 'try{process.stdout.write(String(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).version||""))}catch(e){}' \
+        "$RUNTIME/npm/node_modules/npm/package.json" 2>/dev/null || true)"
+      log "start: npm=$RUNTIME/node/bin/npm version=${npm_ver:-未知}（pnpm 的 view/add 转发目标）"
+    else
+      log "WARN: 缺少 runtime/node/bin/npm —— pnpm 的 view/add 会转发给系统 npm，与自带 node 不兼容（需 0.7.0+ 的完整包）"
+    fi
   else
-    log "WARN: 缺少 runtime/node/bin/pnpm —— dsh 里装插件会报 spawn pnpm ENOENT（需 0.6.9+ 的完整包）"
+    log "WARN: 缺少 runtime/node/bin/pnpm —— dsh 里装插件会报 spawn pnpm ENOENT（需 0.7.0+ 的完整包）"
   fi
 
   local bind

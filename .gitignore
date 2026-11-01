@@ -8,6 +8,7 @@ fpk/app/runtime/node/
 fpk/app/runtime/app/
 # pnpm 也是现场装的（0.6.9 起，约 20MB；dsh 装插件时 spawn 它）
 fpk/app/runtime/pnpm/
+fpk/app/runtime/npm/
 
 # 依赖
 node_modules/

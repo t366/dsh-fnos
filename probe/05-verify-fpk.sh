@@ -132,7 +132,14 @@ try{const b=fs.readFileSync(process.argv[1]);
     if [ -x "$TARGET/runtime/node/bin/pnpm" ]; then
       ok "插件用 pnpm" "$("$TARGET/runtime/node/bin/pnpm" --version 2>&1 | head -n1)"
     else
-      bad "缺少 pnpm" "dsh 里「添加插件」会报 spawn pnpm ENOENT（0.6.9 起应自带 runtime/node/bin/pnpm）"
+      bad "缺少 pnpm" "dsh 里「添加插件」会报 spawn pnpm ENOENT（0.7.0 起应自带 runtime/node/bin/pnpm）"
+    fi
+    # F29：pnpm 的 view/config 会 spawn 裸命令 "npm" 转发，缺了就用系统那份
+    # （飞牛自带 npm 10.9.3），被自带 node 24 跑起来直接崩，界面显示成「包不兼容」。
+    if [ -x "$TARGET/runtime/node/bin/npm" ]; then
+      ok "插件用 npm（pnpm 转发目标）" "$("$TARGET/runtime/node/bin/npm" --version 2>&1 | head -n1)"
+    else
+      bad "缺少 npm" "pnpm 的 view/add 会落到系统 npm 10.9.3，与 node 24 不兼容（0.7.0 起应自带 runtime/node/bin/npm）"
     fi
   elif [ -f "$TARGET/runtime/stub/server.mjs" ]; then
     warn "骨架包（stub）" "未捆绑 dsh，只验证安装链路"

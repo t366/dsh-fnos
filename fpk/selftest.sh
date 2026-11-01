@@ -134,45 +134,61 @@ if [ -e "$ROOT/target/runtime/app" ]; then
   say "沙箱内已移除残留的 dsh 运行时——本段按骨架模式判定"
 fi
 
-# ---- 假 pnpm：验证「把 runtime/node/bin 前置进 PATH」这条链（F28）----
-# dsh 装插件时 spawn 的是裸命令名 "pnpm"，只认 PATH。真 pnpm 有 19MB，
-# 自测不需要它装包，只需要一个「能被找到」的可执行文件。
-# 这里只验证 cmd/main 有没有做前置；wrapper 自身能不能解析到 pnpm.cjs 由
-# 下面那段「按真实布局跑模板」负责（沙箱里的 runtime/node/bin 没有真 node，
-# 所以不能直接用这个假 wrapper 去验证路径）。
-mkdir -p "$ROOT/target/runtime/node/bin" "$ROOT/target/runtime/pnpm/node_modules/pnpm/bin"
-printf '{"name":"pnpm","version":"9.9.9-selftest"}\n' \
-  >"$ROOT/target/runtime/pnpm/node_modules/pnpm/package.json"
-cat >"$ROOT/target/runtime/node/bin/pnpm" <<'EOP'
+# ---- 假 pnpm / 假 npm：验证「把 runtime/node/bin 前置进 PATH」这条链（F28 / F29）----
+# dsh 装插件时 spawn 的是裸命令名 "pnpm"，而 pnpm 的 view/config 又 spawn 裸命令名
+# "npm" 转发 —— 两个都只认 PATH，缺一个就断链。真包加起来 30MB，自测不需要它们装包，
+# 只需要「能被找到 + 版本读得出来」的可执行文件。
+# 这里只验证 cmd/main 有没有做前置；wrapper 自身能不能定位到入口文件由下面那段
+# 「按真实布局跑模板」负责（沙箱里的 runtime/node/bin 没有真 node）。
+for fb in pnpm npm; do
+  mkdir -p "$ROOT/target/runtime/node/bin" "$ROOT/target/runtime/$fb/node_modules/$fb"
+  printf '{"name":"%s","version":"9.9.9-selftest"}\n' "$fb" \
+    >"$ROOT/target/runtime/$fb/node_modules/$fb/package.json"
+  cat >"$ROOT/target/runtime/node/bin/$fb" <<'EOP'
 #!/bin/sh
 # 自测专用假 wrapper：真实版本由 build.sh 生成并自检
 printf '9.9.9-selftest\n'
 EOP
-chmod +x "$ROOT/target/runtime/node/bin/pnpm" 2>/dev/null || true
+  chmod +x "$ROOT/target/runtime/node/bin/$fb" 2>/dev/null || true
+done
 
-# ---- wrapper 模板的路径深度（F28 回归）----
-# build.sh 里的 wrapper 是从 runtime/node/bin 往上找 pnpm 的，层数写错不会在
-# 本地暴露，只会在 NAS 上白等一轮 full 构建（0.6.9 发布前踩过：写成 ../pnpm，
-# 落到了 runtime/node/pnpm 这个不存在的目录）。
+# ---- wrapper 模板的路径深度（F28 / F29 回归）----
+# build.sh 里的两个 wrapper 都是从 runtime/node/bin 往上找 ../<pkg>/node_modules 的，
+# 层数写错不会在本地暴露，只会在 NAS 上白等一轮 full 构建（0.6.9 发布前踩过：
+# 写成 ../pnpm，落到了 runtime/node/pnpm 这个不存在的目录）。
 # 这里把 build.sh 的 heredoc 原样抽出来，按真实布局在沙箱里跑一遍，
-# 并用 shim 顶替 node（沙箱没有 v24 二进制，只要能把 pnpm.cjs 跑起来就够）。
+# 并用 shim 顶替 node（沙箱没有 v24 二进制，只要能把入口文件跑起来就够）。
 WRAPCHK="$ROOT/wrapcheck"
-mkdir -p "$WRAPCHK/runtime/node/bin" "$WRAPCHK/runtime/pnpm/node_modules/pnpm/bin"
-printf 'console.log("9.9.9-wrapcheck")\n' >"$WRAPCHK/runtime/pnpm/node_modules/pnpm/bin/pnpm.cjs"
+mkdir -p "$WRAPCHK/runtime/node/bin"
 printf '#!/bin/sh\nexec node "$@"\n' >"$WRAPCHK/runtime/node/bin/node"
 chmod +x "$WRAPCHK/runtime/node/bin/node"
+# 入口文件名两个包不同：pnpm → bin/pnpm.cjs，npm → bin/npm-cli.js
+wrap_entry() { case "$1" in pnpm) echo pnpm.cjs ;; npm) echo npm-cli.js ;; esac; }
+# 只取**第一个** heredoc：两个块的结束标记都是 WRAP，不 exit 的话第二段会被追加进来。
+# 用 index() 而不是正则首行匹配：build.sh 里这行有缩进（模式设 ^ 会一条都抽不到）。
+extract_wrap() {
+  awk -v pat="cat >app/runtime/node/bin/$1 <<" '
+    index($0, pat) > 0 { f = 1; next }
+    f && /^WRAP$/ { exit }
+    f' "$HERE/build.sh"
+}
 if command -v awk >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
-  awk '/cat >app\/runtime\/node\/bin\/pnpm <<.WRAP.$/{f=1;next} /^WRAP$/{f=0} f' \
-    "$HERE/build.sh" >"$WRAPCHK/runtime/node/bin/pnpm"
-  chmod +x "$WRAPCHK/runtime/node/bin/pnpm"
-  # 抽空了就等于没测 —— awk 的模式对不上时会安静地输出空文件，然后「通过」
-  check "从 build.sh 抽到了 wrapper 模板" "yes" \
-    "$([ -s "$WRAPCHK/runtime/node/bin/pnpm" ] && echo yes || echo no)"
-  # 故意换到 $ROOT 调用：证明它找的是自己旁边的文件，而不是 cwd 里的东西
-  check "wrapper 能找到 pnpm.cjs（换 cwd 调用）" "9.9.9-wrapcheck" \
-    "$(cd "$ROOT" && "$WRAPCHK/runtime/node/bin/pnpm" 2>&1)"
+  for wb in pnpm npm; do
+    ENTRY="$(wrap_entry "$wb")"
+    mkdir -p "$WRAPCHK/runtime/$wb/node_modules/$wb/bin"
+    printf 'console.log("9.9.9-wrapcheck")\n' \
+      >"$WRAPCHK/runtime/$wb/node_modules/$wb/bin/$ENTRY"
+    extract_wrap "$wb" >"$WRAPCHK/runtime/node/bin/$wb"
+    chmod +x "$WRAPCHK/runtime/node/bin/$wb"
+    # 抽空了就等于没测 —— awk 的模式对不上时会安静地输出空文件，然后「通过」
+    check "从 build.sh 抽到了 $wb 的 wrapper 模板" "yes" \
+      "$([ -s "$WRAPCHK/runtime/node/bin/$wb" ] && echo yes || echo no)"
+    # 故意换到 $ROOT 调用：证明它找的是自己旁边的文件，而不是 cwd 里的东西
+    check "$wb wrapper 能找到 $ENTRY（换 cwd 调用）" "9.9.9-wrapcheck" \
+      "$(cd "$ROOT" && "$WRAPCHK/runtime/node/bin/$wb" 2>&1)"
+  done
 else
-  SKIP=$((SKIP + 2))
+  SKIP=$((SKIP + 4))
   printf '  \033[33mSKIP\033[0m  wrapper 模板提取与路径解析（缺 awk 或 node）\n'
 fi
 
@@ -217,13 +233,19 @@ check "start 退出码" "0" "$START_RC"
 check "本段跑的是骨架模式" "yes" \
   "$(grep -q 'start: mode=stub' "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
 
-# F28：插件管理靠 PATH 上的 pnpm。这里断言两件事：
-#   ① cmd/main 认出了 runtime/node/bin/pnpm（而不是回落到 WARN）；
-#   ② 它真的把该目录前置进了子进程环境（只看日志会被「写了日志但没 export」骗过）。
+# F28 / F29：插件管理靠 PATH 上的 pnpm，pnpm 的 view/add 又靠 PATH 上的 npm。
+# 这里断言三件事：
+#   ① cmd/main 认出了两个 wrapper（而不是回落到 WARN）；
+#   ② 版本各自取自自己的包元数据（只断言「最后一个 version=」会把 npm 的当成 pnpm 的）；
+#   ③ 它真的把该目录前置进了子进程环境（只看日志会被「写了日志但没 export」骗过）。
 check "启动日志记录了 pnpm 路径" "yes" \
   "$(grep -qF "pnpm=$ROOT/target/runtime/node/bin/pnpm" "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
+check "启动日志记录了 npm 路径" "yes" \
+  "$(grep -qF "npm=$ROOT/target/runtime/node/bin/npm" "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
 check "pnpm 版本取自包元数据" "9.9.9-selftest" \
-  "$(grep -o 'version=[^（]*' "$ROOT/var/info.log" 2>/dev/null | tail -n1 | cut -d= -f2-)"
+  "$(grep 'start: pnpm=' "$ROOT/var/info.log" 2>/dev/null | grep -o 'version=[^（]*' | tail -n1 | cut -d= -f2-)"
+check "npm 版本取自包元数据" "9.9.9-selftest" \
+  "$(grep 'start: npm=' "$ROOT/var/info.log" 2>/dev/null | grep -o 'version=[^（]*' | tail -n1 | cut -d= -f2-)"
 SPID="$(cut -d' ' -f1 "$ROOT/var/dsh.pid" 2>/dev/null || true)"
 if [ "$LINUX" = "yes" ] && [ -n "${SPID:-}" ] && [ -r "/proc/$SPID/environ" ]; then
   check_linux "子进程 PATH 已前置 runtime/node/bin" "yes" \

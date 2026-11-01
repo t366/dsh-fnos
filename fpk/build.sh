@@ -27,6 +27,12 @@ DSH_VERSION="${DSH_VERSION:-0.2.1-rc.3}"
 # 钉 10.x 的理由：dsh 的引导文案让用户改 pnpm-workspace.yaml 里的 allowBuilds，
 # 这个字段 10.26 才有（v11 起只认它）；10.34.9 是 10.x 的最新维护版，仍支持 node 18+。
 DSH_PNPM_VERSION="${DSH_PNPM_VERSION:-10.34.9}"
+# 只带 pnpm 不够：pnpm 的 `view` / `config` 子命令自己没有实现，直接 spawn 裸命令
+# "npm" 转发（pnpm/dist/pnpm.cjs 里的 run-npm：`const npm = npmPath ?? "npm"`）。
+# PATH 上找不到 npm 时会落到系统那份 —— 飞牛自带 npm 10.9.3，而 dsh 强制用自带
+# node 24 去跑它，在 minizlib 里 `Class extends value undefined`（F29）。
+# 钉 11.x：node 24 发行版自带的就是 npm 11，engines ^20.17 || >=22.9 与 v24 相容。
+DSH_NPM_VERSION="${DSH_NPM_VERSION:-11.21.1}"
 NODE_SRC="${NODE_SRC:-/var/apps/nodejs_v24/target}"
 
 say() { printf '%s\n' "$*"; }
@@ -355,6 +361,58 @@ WRAP
   [ "$PNPM_GOT" = "$DSH_PNPM_VERSION" ] \
     || die "pnpm 版本不符：期望 $DSH_PNPM_VERSION，实际 $PNPM_GOT"
   say "pnpm 自检通过：$PNPM_GOT（app/runtime/pnpm $(du -sh app/runtime/pnpm 2>/dev/null | awk '{print $1}')）"
+
+  # ---- npm：pnpm 的子命令会把请求转发给它，缺了就会拿系统那份（F29）----
+  # 放在 runtime/npm，布局与 pnpm 完全对称；wrapper 同样进 runtime/node/bin，
+  # 让「PATH 前置一次，两个包管理器都用自带 node 跑」这条承诺成立。
+  rm -rf app/runtime/npm
+  mkdir -p app/runtime/npm
+  say "安装 npm@$DSH_NPM_VERSION ..."
+  printf '{"name":"dsh-runtime-npm","private":true}\n' >app/runtime/npm/package.json
+  "$NODE_SRC/bin/npm" install --omit=dev --no-audit --no-fund \
+    --prefix "$PWD/app/runtime/npm" "npm@$DSH_NPM_VERSION" \
+    >/tmp/dsh-npm-npm.log 2>&1 || { tail -n 30 /tmp/dsh-npm-npm.log; die "npm 安装失败"; }
+  NPM_JS="app/runtime/npm/node_modules/npm/bin/npm-cli.js"
+  [ -f "$NPM_JS" ] || die "安装后找不到 $NPM_JS，npm 没有真正装成功"
+
+  cat >app/runtime/node/bin/npm <<'WRAP'
+#!/bin/sh
+# 由 build.sh 生成，勿手改。
+# 布局：runtime/node/bin/npm  ->  ../../npm/node_modules/npm/bin/npm-cli.js
+# 两级向上：$here 已是 runtime/node/bin，上一级是 runtime/node（不是 runtime）。
+here=$(cd "$(dirname "$0")" && pwd)
+npm_js="$here/../../npm/node_modules/npm/bin/npm-cli.js"
+if [ ! -f "$npm_js" ]; then
+  printf 'npm: 找不到 %s（运行时安装不完整，请重装应用）\n' "$npm_js" >&2
+  exit 127
+fi
+exec "$here/node" "$npm_js" "$@"
+WRAP
+  chmod +x app/runtime/node/bin/npm
+
+  NPM_GOT="$(cd / && PATH="$PNPM_BIN_DIR:$PATH" npm --version 2>&1)" \
+    || die "npm wrapper 无法运行：$NPM_GOT"
+  [ "$NPM_GOT" = "$DSH_NPM_VERSION" ] \
+    || die "npm 版本不符：期望 $DSH_NPM_VERSION，实际 $NPM_GOT"
+  say "npm 自检通过：$NPM_GOT（app/runtime/npm $(du -sh app/runtime/npm 2>/dev/null | awk '{print $1}')）"
+
+  # ---- 端到端：把失败的那条命令本身跑一遍 ----
+  # 前两条自检只证明「两个 wrapper 各自能跑」，证明不了 pnpm 转发 npm 这条链路。
+  # 这个 bug 正是这样漏到真机的：两个包管理器都在，串起来却是坏的。
+  # 判据 = 输出非空的一行版本号；用 lodash（长期稳定、体积小）避免镜像同步问题。
+  # 无外网时可用 DSH_SKIP_NETCHECK=1 跳过，但跳过就少了一层保障。
+  if [ "${DSH_SKIP_NETCHECK:-0}" = "1" ]; then
+    say "⚠️  已按 DSH_SKIP_NETCHECK=1 跳过 pnpm view 联网自检"
+  else
+    say "端到端自检：pnpm view lodash version（会真的走 pnpm → npm 转发）..."
+    VIEW_GOT="$(cd / && PATH="$PNPM_BIN_DIR:$PATH" \
+      pnpm view lodash version --registry=https://registry.npmmirror.com/ \
+      --config.fetch-retries=0 2>&1)" || true
+    case "$VIEW_GOT" in
+      [0-9]*.[0-9]*) say "端到端自检通过：pnpm view lodash version -> $VIEW_GOT" ;;
+      *) die "pnpm view 走不通（pnpm 会把 view 转发给 npm，两者必须成套）：$VIEW_GOT" ;;
+    esac
+  fi
   say "运行时就绪"
 else
   [ -f app/runtime/stub/server.mjs ] || die "骨架模式下缺少 app/runtime/stub/server.mjs"
