@@ -69,75 +69,59 @@
 
 ---
 
-## 当前剩余问题（按优先级）
+## 剩余问题总览
 
-> 截至 2026-11-01 18:37。真机已装 **`0.7.2`**：F31（升级快照）、F32（凭据判据）**已验通** ——
-> 升级时确实打了个 486M 的 `.dsh-home` 快照，`home:` 指向共享目录，`credentials: kept`。
-> 当前唯一未闭环的代码问题是 **F30（store 不一致）**，另新开 **F35（快照位置会被卸载清空）**。
-> 只列**还没关闭**的项；已修缺陷见第二节，平台限制见第一节。
+> 截至 2026-11-01 18:50，真机 **`0.7.2`**。这里只列**还没关掉的**，按「下一步要不要动手」分四档：
+> **A 档**一条命令能关、**B 档**要改代码（已定方案待排期）、**C 档**证据已在手可直接结案、
+> **D 档**明知有风险但决定先不动。已修缺陷见第二节，平台限制见第一节，历史验收见第三节。
 >
-> **已关闭（最近）**：P0 实例归属、F16 的 root 文件残留、T1 / T2（0.5.0 装机验收）、
-> **T10 启停入口**（在「打开」右侧 `▼` 里，非缺陷）、**T11 覆盖安装**（可行，不必再卸载）、
-> **F21 图标发虚**（根因是用错了素材，0.6.5 原样用官方 `icon-512.png` 后用户确认清晰）、
-> 以及 `probe/05` 的「两套 workspace」误报（断言读错了日志行）。
-> P0 的判据留档在文末，同类问题照抄即可。
+> **最近关闭**：F31（升级快照真会打了，486M）、F32（凭据判据不再误报）——见 DEVLOG 阶段 30。
 
-### P1 代码已就位，缺的只是一次验收
+### A 档　差一条命令（零成本，建议先做）
 
-`0.6.5` 已装，下面四项直接可验：
-
-| 项 | 命令 / 判据 | 期望 |
+| 项 | 判据 | 现状 / 缺什么 |
 |---|---|---|
-| F15 密钥自愈 | `stat -c '%a' /var/apps/dsh/var/launcher-secret` | `600`（旧版遗留的 700 应被收敛） |
-| `probe/05` 全量 | `bash probe/05-verify-fpk.sh` | `FAIL 0`；workspace 那条不再报分裂 |
-| 入口图标 | `probe/05` 里「包图标」一行 | `512x512`（读包根 `ICON.PNG` 的真实尺寸） |
-| F18 stop 复核 | `appcenter-cli stop dsh && appcenter-cli start dsh` | 能停能起；停不掉时会打印原因而非只回 10330 |
+| **F33 令牌打码** | 只看 0.7.2 之后的行：`awk '$0>="2026-11-01 18:33"' /var/apps/dsh/var/info.log \| grep -c '"token":"[A-Za-z0-9_-]\{20,\}'` 应为 **0** | 手上那份 info.log 只到 17:15（升级前），23 条全是旧代码漏的；**新行还没人看** |
+| **F30 store 对齐** | `su -s /bin/sh dsh -c 'cd / && HOME=/vol1/@appshare/dsh/workspace/.dsh-home PATH=/var/apps/dsh/target/runtime/node/bin:$PATH pnpm store path'` 打印 `/vol1/@appshare/dsh/.pnpm-store/v10`；界面「添加插件」不再报 `ERR_PNPM_UNEXPECTED_STORE` | 修法是**手工**写 `$DSH_HOME/.config/pnpm/rc`，代码里 `grep -rn store-dir fpk/` 为空 —— 换台机器重装就会重踩 |
+| **F25 探测身份** | 造一个 `700 root` 的目录加进授权列表，`grep '读不了' info.log` 应出现该目录，且不再写「读写」 | 现有 25 条 `auth-paths` **全是（读写）**，假阳性那条分支从没被触发过 |
+| **F34 var 归一** | 停应用后 `bash /var/apps/dsh/cmd/main start`：`/vol1/@appdata/dsh/dsh.pid` 在、`/var/apps/dsh/var/dsh.pid` 不在 | 可选；手工启动属风险操作，要顺手确认再停一次能停干净 |
 
-（`probe/07` 的降权自检属探针侧，`git pull` 即生效，不必等装包。）
+### B 档　要改代码（方案已定，等排期）
 
-### P2 待验证：判据已写好，缺的只是真机跑一次
-
-| 项 | 判据 | 前置 |
+| 项 | 工作量 | 不做的后果 |
 |---|---|---|
-| **F28 插件安装（pnpm）** | 装 0.6.9 后 `grep 'start: pnpm=' /var/apps/dsh/var/info.log` 出现 `version=10.34.9（已前置到 PATH）`；Web 界面「添加插件」不再报 `spawn pnpm ENOENT` | ✅ 0.6.9 真机已验证（ENOENT 消失） |
-| **F29 插件安装（npm）** | 装 0.7.1 后 `grep 'start: npm=' /var/apps/dsh/var/info.log` 出现 `version=11.21.1`；Web 界面「添加插件」能读到版本号并开始下载 | ✅ 0.7.1 真机已验证（读出描述与 `版本 0.9.26`） |
-| **F30 插件安装（store）** | 以 dsh 身份 `pnpm store path` 打印 `/vol1/@appshare/dsh/.pnpm-store/v10`；界面「添加插件」不再报 `ERR_PNPM_UNEXPECTED_STORE`，能装完并出现在插件列表 | 写 `$DSH_HOME/.config/pnpm/rc` 的 `store-dir` |
-| **F31 升级快照** | 装 0.7.2 时 `grep 'upgrade_init: backup' /var/apps/dsh/var/info.log` 出现 `backup: ok …/backups/pre-upgrade-0.7.1-to-0.7.2-*.tar.gz`；`ls /vol1/@appdata/dsh/backups/` 有该文件，`tar -tzf` 首行是 `.dsh-home/` | ✅ 2026-11-01 18:33 已验证：`(486M)`，`tar -tzf` 首行 `.dsh-home/` |
-| **F32 凭据判据** | 同一次升级出现 `upgrade_callback: home: /vol1/@appshare/dsh/workspace/.dsh-home` 与 `credentials: kept`（或「无 .credentials.yaml，但已有会话」），不再是 `absent (首次安装…)` | ✅ 2026-11-01 18:34 已验证：`home:` + `kept` |
-| **F35 快照位置** | `ls /vol1/@appshare/dsh/backups/` 有快照；卸载（选保留）→ 重装后该文件仍在 | 待 0.7.3 |
-| **F33 令牌打码** | `grep -c '"token":"[A-Za-z0-9_-]\{20,\}' /var/apps/dsh/var/info.log` 在**新产生的**行里为 0（老行仍在，属正常） | 装 0.7.2 后启动一次 |
-| **F34 var 归一** | 手工 `bash /var/apps/dsh/cmd/main start` 后 `ls -l /vol1/@appdata/dsh/dsh.pid` 存在，且 `/var/apps/dsh/var/dsh.pid` 不出现 | 装 0.7.2（可选，风险操作） |
-| **dsh 升到 rc.5** | `grep 'dsh 版本校验通过' ~/build-*.log` 是 `0.2.1-rc.5`；装完首屏、旧会话、工作区都正常，插件列表能打开；顺带复核 F24 的「可访问目录」入口是否还在（dsh 前端改版可能动到路径） | 装 0.7.2 |
-| **F22 默认工作区** | 工作区下拉里出现「默认工作区」且处于勾选态；`grep XDG_DOCUMENTS_DIR /vol1/@appshare/dsh/workspace/.dsh-home/.config/user-dirs.dirs` 指向共享目录；原 `Project` 与旧会话仍在 | 0.6.7 已装，等一句确认 |
-| ~~F23 访问权限~~ ✅ | 真机已验证：「访问权限」页出现，`存储空间1/T366的文件/Project` 加成「读写」成功 | 已完成 |
-| **F24 授权目录导航** | 装 0.6.8 后「选择工作区目录」首屏出现「可访问目录」，进去能点到刚授权的文件夹，选中后能建工作区；`ls /vol1/@appshare/dsh/workspace/.dsh-home/可访问目录` 有对应软链 | 装 0.6.8 |
-| **F25 探测身份** | 装 0.6.8 后 `grep auth-paths /var/apps/dsh/var/info.log`：能用的目录写「读写」，`nobody:0000` 那类目录写「读不了…如 xxx（nobody:nogroup 0000）」而不再谎报「读写」 | 装 0.6.8 |
-| 历史会话是否还在 | 由**平台**启动后，侧栏旧会话仍在 | 现在就能验 |
-| T5 解包峰值 | 安装时轮询 `df`，峰值不超 1.5GB 阈值余量 | 下一次安装 |
-| **T6 双网卡** | 从 `.109` 与 `.114` 两侧都能打开入口 | **当前 `.109` 不通**（见下） |
-| T4 能否降级 | 快照回滚后旧 dsh 读不读得动新 schema | 无（高风险，可长期搁置） |
-
-**T6 已从「潜在风险」升级为「现存缺口」**：`ss` 实测 launcher 只监听 `127.0.0.1` 与
-`192.168.0.114`，dsh 本体只在 `.114:3081`。从无线网段访问 `.109:3080` 打不开，且
-`--host` 是启动时探测的固定值，NAS 换 IP 后会静默失效直到重启应用。修法受限：**dsh
-本体明确拒绝 `0.0.0.0`**（代码里直接 `die`），只能 launcher 绑通配 + 302 到单 IP，
-属拓扑改动。若决定做 T7 网关，这条会自然消失，所以先不单独改。
-
-
-### P3 要做但还没动手
-
-| 项 | 收益 | 代价 |
-|---|---|---|
-| **T7 统一网关** | 一次解决外网 / DDNS / FN Connect / 双网卡，并套上 fnOS 登录鉴权 | 大：manifest `microApp`、`app.sock` 反代、`auto` 判据重写 |
-| T8 进程看护 | dsh 崩了能自愈 | 中：要先理清与应用中心 stop 的竞争 |
-| 瘦身 977MB（fpk 199MB）→ 约 120MB | 安装更快、占用减半 | 中：`install_dep_apps: nodejs_v24` + 去 bundled node |
-| 插件能力 | 「一切皆插件」才用得起来 | 中：`bin/dsh` 包装 + 官方 plugin market bundle |
-| T3 端口可配 | 避免 3080 冲突 | 小，但 manifest / 向导 / UI / 跳转器四处联动 |
-| ARM 包 | 覆盖更多机型 | 交叉构建 + 真机验证 |
+| **F35 快照落点** → `@appshare/dsh/backups` | 小：`lib-home` 加 `dsh_backup_dir_for()` + `upgrade_init` 换调用 | 卸载重装（RUNBOOK 4.2）会把唯一回滚副本一起删掉 |
+| **T6 双网卡** | 中：launcher 绑通配 + 302 到单 IP；dsh 本体拒绝 `0.0.0.0` | 无线网段 `.109` 打不开；换 IP 后静默失效到重启 |
+| **瘦身** 977MB（fpk 199MB）→ 约 120MB | 中：`install_dep_apps: nodejs_v24` + 去 bundled node | 安装慢、占用翻倍 |
+| **插件能力** | 中：`bin/dsh` 包装 + 官方 plugin market bundle | 「一切皆插件」用不起来，只能一个个手装 |
+| **T8 进程看护** | 中：先理清与应用中心 stop 的竞争 | dsh 崩了不会自愈 |
+| **T3 端口可配** | 小-中：manifest / 向导 / UI / 跳转器四处联动 | 3080 撞车只能卸载重装 |
+| **T7 统一网关** | 大：`microApp` + `app.sock` 反代 + `auto` 判据重写 | 外网 / DDNS / FN Connect 无解；但做了能一次带走 T6 |
+| **ARM 包** | 中：交叉构建 + 真机验证 | 覆盖不到 ARM 机型 |
 
 **排序上的一个判断**：如果确定要做 T7，F17 的回环双绑只是过渡措施——统一网关下 launcher
 本来就该只监听 `127.0.0.1`，那时「平台探测不到」和「双网卡绑错」会一起消失。所以 T7 要么
 尽早做，要么明确不做；不要先为 T6 写一套网卡探测，再被 T7 推翻。
+
+### C 档　证据已在手，更新台账即可结案
+
+`info.log`（807 行，10-27 17:32 → 11-01 17:15，26 次启动）里已能反证这四项，缺的只是走一遍 UI：
+
+| 项 | 日志证据 |
+|---|---|
+| **F17 回环双绑** | 19 次 `launcher: listening on http://127.0.0.1:3080 (loopback, 供平台与本机自检)` |
+| **F22 默认工作区** | 14 次 `default-ws`：1 次 `created df888b19-…` + 13 次 `skip: 已有默认工作区` —— 只建一次、之后不动 |
+| **F24 授权目录导航** | 22 次 `access-links: 挂载 Project -> /vol1/1000/Project`；两次手工启动正确走「无授权目录，保持现状」，软链没被误删 |
+| **F27 坑 1（工作区不可写）** | 走 dsh 授权通道后可写，已结案 |
+
+剩下要人眼看的只有一处：dsh 里「+ 添加工作区 → 可访问目录」能不能点到 `Project`。
+
+### D 档　明知有风险，暂不动
+
+| 项 | 为什么先不动 |
+|---|---|
+| **T4 升级不可降级** | 要验「旧 dsh 读不读得动新 schema」，只能拿真实数据赌一次；收益是理论上的 |
+| **T5 解包峰值** | 已知耗时与占用，只是没测瞬时峰值；下次安装顺手轮询 `df` 即可，不值得专门跑一轮 |
 
 > **另有 8 项长期实测不在本表**，只在 [PLAN §10.2 / §10.3](../PLAN.md) 维护：pty 实例化、
 > `.114` 地址稳定性、`run-as` 真实沙箱档位、`settings.conf` 重写时机、`ui/config` 端口不一致、
