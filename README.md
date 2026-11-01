@@ -11,7 +11,7 @@
 
 | 项 | 值 |
 |---|---|
-| 包版本 | **0.7.2**（源码就绪，**待 NAS 上打包与真机验证**；相对 0.7.1 只改升级链路与日志：升级前快照真的会做了、凭据判据不再误报、启动日志不再明文写登录令牌、手工启动不再产生第二个 `var`） |
+| 包版本 | **0.7.2**（**已在 NAS 真机装成并验收**：升级前快照真的会打了——486M 的 `.dsh-home` 包；凭据判据不再误报 `absent`，同一天内 0.7.1 判 `absent`、0.7.2 判 `kept` 构成对照；启动日志不再明文写登录令牌；手工启动不再产生第二个 `var`）。已知遗留：快照落在会被卸载清空的 `@appdata` → [ISSUES F35](docs/ISSUES.md)，计划 0.7.3 挪到 `@appshare` |
 | 最近一次完整真机验收 | **0.6.7**：图标、启停入口、「访问权限」页均已确认；0.5.0 时为 `probe/05` **33 PASS / 1 WARN / 0 FAIL**、`probe/07` **10 PASS / 0 FAIL**。待验项见 [ISSUES 的 P1/P2](docs/ISSUES.md) |
 | 数据落点 | 共享目录 `dsh/workspace/.dsh-home`（**跨卸载存活**，已实测） |
 | 默认工作区 | `dsh/workspace/deepseek-harness/default-workspace`（0.6.6 起自动建；原理见 [ISSUES F22](docs/ISSUES.md)） |

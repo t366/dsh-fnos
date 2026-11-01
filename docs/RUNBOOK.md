@@ -224,11 +224,21 @@ tar -xzf /vol1/@appdata/dsh/backups/pre-upgrade-<旧>-to-<新>-<时间>.tar.gz \
 appcenter-cli start dsh
 ```
 
+> ⚠️ **0.7.2 起快照落在 `@appdata`，而这个目录会被「卸载」清空**（P6 / F35）。
+> 所以：只要动了「卸载重装」的念头，**第一步先把快照拷出来**——
+> ```bash
+> mkdir -p /vol1/1000/dsh-rollback && cp /vol1/@appdata/dsh/backups/pre-upgrade-*.tar.gz /vol1/1000/dsh-rollback/
+> ```
+> 0.7.3 会把落点改到 `/vol1/@appshare/dsh/backups/`（卸载不清空），届时本节会更新。
+
 ### 4.2　兜底：卸载（选保留）→ 安装
 
 只有在 4.1 被平台拒绝或需要回退时走这里：
 
 1. 应用中心 → dsh → **卸载** → 弹窗选「**保留会话、凭据与设置**」；
+   - 这一项**不能选错**：选「不保留」会连 `/vol1/@appshare/dsh` 一起删，
+     会话、凭据、以及 `@appdata/dsh/backups/` 里的升级快照全部不可恢复（P6 / F35）；
+   - 若你打算回滚数据，**卸载前**先把快照拷到 `/vol1/1000/` 下（命令见 4.1 末尾的提示框）；
 2. 应用中心 → **手动安装** → 选刚下载的 `dsh.fpk` → 安装；
    - 向导里 **API Key 留空 = 沿用旧值**，不要为了"干净"重填；
    - 「入口方式」保持默认「点图标直接进入」；

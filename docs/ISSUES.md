@@ -51,8 +51,9 @@
 | F28 | 「添加插件」一律失败：运行时只有 node 二进制，没有 pnpm | 缺陷（打包） | ✅ | 0.6.9：`build.sh` 装 pnpm 10.34.9 + `cmd/main` 前置 PATH；真机已消除 `spawn pnpm ENOENT` |
 | F29 | 插件信息仍读不出来：pnpm 把 `view` 转发给系统 npm 10.9.3，和自带 node 24 不兼容 | 缺陷（打包/依赖链） | ✅ | 0.7.0：运行时成套带 npm 11.21.1 + 打包时真跑 `pnpm view` 当门禁；**0.7.1 真机已能读出包描述与 `版本 0.9.26`** |
 | F30 | 插件安装报 `ERR_PNPM_UNEXPECTED_STORE`：profile 的 node_modules 由别的 store 装出来 | 缺陷（依赖/环境） | ⚠️ | 待确认 `.modules.yaml` 的 `storeDir`；修法见正文（重装 profile 或对齐 store-dir） |
-| F31 | 升级前的数据快照一次都没跑过：备份的是 0.2.0 之前的老路径，`[ -d ]` 恒假静默跳过 | 缺陷（升级） | ⚠️ | 0.7.2：`upgrade_init` 走 `cmd/lib-home`，快照进 `var/backups/`、留 2 份、tar 失败即中止；**待真机升级验证** |
-| F32 | 凭据检查永远 `credentials: absent`：同一个失效路径，让「不用重新登录」这条验收无法证伪 | 缺陷（判据） | ⚠️ | 0.7.2：`upgrade_callback` 按真实目录分三态判定并打印 `home:`；**待真机验证** |
+| F31 | 升级前的数据快照一次都没跑过：备份的是 0.2.0 之前的老路径，`[ -d ]` 恒假静默跳过 | 缺陷（升级） | ✅ | 0.7.2 真机已验证：`backup: ok …pre-upgrade-0.7.1-to-0.7.2-20261101-183329.tar.gz (486M)`，`tar -tzf` 首行 `.dsh-home/` |
+| F32 | 凭据检查永远 `credentials: absent`：同一个失效路径，让「不用重新登录」这条验收无法证伪 | 缺陷（判据） | ✅ | 0.7.2 真机已验证：`home: /vol1/@appshare/dsh/workspace/.dsh-home` + `credentials: kept`（同日 16:10 / 17:05 两次旧版升级仍是 `absent`，构成对照） |
+| F35 | 升级快照落在 `@appdata/dsh/backups`，而卸载会清空该目录内容（P6）：真要回滚就得卸载重装，快照先被卸载删掉 | 缺陷（恢复路径） | ⚠️ | 计划：快照改落 `@appshare/dsh/backups`（与 `workspace` 平级，卸载不清空）；见下文 |
 | F33 | 启动日志明文写入完整登录令牌（`"token":"…"` 未打码），而 info.log 正是外发排障的那份 | 缺陷（安全） | ✅ | 0.7.2：`start: state=` 两条正则都打码；`dsh web:` 那行控制不了，改由 RUNBOOK 强制脱敏 |
 | F34 | 手工启动算出第二个 var 目录 → 两套 pidfile → 3080 被占 2h20m | 缺陷（路径） | ✅ | 0.7.2：`PKGVAR` 缺省值按 `@appcenter → @appdata` 归一 |
 | T1 | 0.5.0 打包与真机安装 | — | ✅ | `probe/05` 33 PASS / 1 WARN / 0 FAIL |
@@ -70,9 +71,9 @@
 
 ## 当前剩余问题（按优先级）
 
-> 截至 2026-11-01 17:50。真机已装 **`0.7.1`**：F28（pnpm）、F29（npm 转发）**已验通** ——
-> 插件信息能读出描述与 `版本 0.9.26`。失败点前移到安装阶段 → **F30（store 不一致）**。
-> `0.7.2` 已就绪待装：修 F31–F34（升级快照、凭据判据、令牌明文、`var` 双目录）。
+> 截至 2026-11-01 18:37。真机已装 **`0.7.2`**：F31（升级快照）、F32（凭据判据）**已验通** ——
+> 升级时确实打了个 486M 的 `.dsh-home` 快照，`home:` 指向共享目录，`credentials: kept`。
+> 当前唯一未闭环的代码问题是 **F30（store 不一致）**，另新开 **F35（快照位置会被卸载清空）**。
 > 只列**还没关闭**的项；已修缺陷见第二节，平台限制见第一节。
 >
 > **已关闭（最近）**：P0 实例归属、F16 的 root 文件残留、T1 / T2（0.5.0 装机验收）、
@@ -101,8 +102,9 @@
 | **F28 插件安装（pnpm）** | 装 0.6.9 后 `grep 'start: pnpm=' /var/apps/dsh/var/info.log` 出现 `version=10.34.9（已前置到 PATH）`；Web 界面「添加插件」不再报 `spawn pnpm ENOENT` | ✅ 0.6.9 真机已验证（ENOENT 消失） |
 | **F29 插件安装（npm）** | 装 0.7.1 后 `grep 'start: npm=' /var/apps/dsh/var/info.log` 出现 `version=11.21.1`；Web 界面「添加插件」能读到版本号并开始下载 | ✅ 0.7.1 真机已验证（读出描述与 `版本 0.9.26`） |
 | **F30 插件安装（store）** | 以 dsh 身份 `pnpm store path` 打印 `/vol1/@appshare/dsh/.pnpm-store/v10`；界面「添加插件」不再报 `ERR_PNPM_UNEXPECTED_STORE`，能装完并出现在插件列表 | 写 `$DSH_HOME/.config/pnpm/rc` 的 `store-dir` |
-| **F31 升级快照** | 装 0.7.2 时 `grep 'upgrade_init: backup' /var/apps/dsh/var/info.log` 出现 `backup: ok …/backups/pre-upgrade-0.7.1-to-0.7.2-*.tar.gz`；`ls /vol1/@appdata/dsh/backups/` 有该文件，`tar -tzf` 首行是 `.dsh-home/` | 装 0.7.2（升级动作本身） |
-| **F32 凭据判据** | 同一次升级出现 `upgrade_callback: home: /vol1/@appshare/dsh/workspace/.dsh-home` 与 `credentials: kept`（或「无 .credentials.yaml，但已有会话」），不再是 `absent (首次安装…)` | 装 0.7.2 |
+| **F31 升级快照** | 装 0.7.2 时 `grep 'upgrade_init: backup' /var/apps/dsh/var/info.log` 出现 `backup: ok …/backups/pre-upgrade-0.7.1-to-0.7.2-*.tar.gz`；`ls /vol1/@appdata/dsh/backups/` 有该文件，`tar -tzf` 首行是 `.dsh-home/` | ✅ 2026-11-01 18:33 已验证：`(486M)`，`tar -tzf` 首行 `.dsh-home/` |
+| **F32 凭据判据** | 同一次升级出现 `upgrade_callback: home: /vol1/@appshare/dsh/workspace/.dsh-home` 与 `credentials: kept`（或「无 .credentials.yaml，但已有会话」），不再是 `absent (首次安装…)` | ✅ 2026-11-01 18:34 已验证：`home:` + `kept` |
+| **F35 快照位置** | `ls /vol1/@appshare/dsh/backups/` 有快照；卸载（选保留）→ 重装后该文件仍在 | 待 0.7.3 |
 | **F33 令牌打码** | `grep -c '"token":"[A-Za-z0-9_-]\{20,\}' /var/apps/dsh/var/info.log` 在**新产生的**行里为 0（老行仍在，属正常） | 装 0.7.2 后启动一次 |
 | **F34 var 归一** | 手工 `bash /var/apps/dsh/cmd/main start` 后 `ls -l /vol1/@appdata/dsh/dsh.pid` 存在，且 `/var/apps/dsh/var/dsh.pid` 不出现 | 装 0.7.2（可选，风险操作） |
 | **dsh 升到 rc.5** | `grep 'dsh 版本校验通过' ~/build-*.log` 是 `0.2.1-rc.5`；装完首屏、旧会话、工作区都正常，插件列表能打开；顺带复核 F24 的「可访问目录」入口是否还在（dsh 前端改版可能动到路径） | 装 0.7.2 |
@@ -1225,7 +1227,7 @@ su -s /bin/sh dsh -c "cd / && HOME='$H' PATH=/var/apps/dsh/target/runtime/node/b
 必须切到 dsh 用户（否则属主变 root，F26 老坑）、装完核对 `.modules.yaml` 的 `storeDir`。
 
 
-### F31 升级前的数据快照一次都没跑过：备份的是 0.2.0 之前的老路径 ⚠️（0.7.2 修复，待真机验证）
+### F31 升级前的数据快照一次都没跑过：备份的是 0.2.0 之前的老路径 ✅（0.7.2 修复，2026-11-01 18:33 真机验证）
 
 **发现方式**（2026-11-01 复盘 807 行 `info.log`）：全文 `grep -c backup` = **0**，
 而这段历史里有 **7 次 `upgrade_init`**（0.6.1→0.6.2 … 0.6.9→0.7.1）。
@@ -1265,8 +1267,28 @@ tar -tzf /vol1/@appdata/dsh/backups/pre-upgrade-*.tar.gz | head   # 首行应为
 本地已用假数据跑通：备份/轮转/跳过三条分支都验过（`.tmp/t-home.sh`），
 并确认包内有 `.dsh-home/sessions/…`、`.credentials.yaml`、`storages/workspace.json`。
 
+**真机验证（0.7.1 → 0.7.2，2026-11-01 18:33）**：
 
-### F32 凭据检查永远打印 `credentials: absent`：同一个路径写错 ⚠️（0.7.2 修复，待真机验证）
+```
+18:33:52 [544194] upgrade_init: backup: ok /vol1/@appdata/dsh/backups/pre-upgrade-0.7.1-to-0.7.2-20261101-183329.tar.gz (486M)
+18:34:25 [544782] upgrade_callback: runtime: new runtime in place, dropped .old
+18:34:30 [544782] upgrade_callback: ok
+
+$ tar -tzf ….tar.gz | head -3
+.dsh-home/
+.dsh-home/settings.conf
+.dsh-home/profiles/
+```
+
+三点都符合设计：快照真落盘（486M，含 `profiles/` 与 `settings.conf`）、包内保留
+`.dsh-home/` 顶层目录（恢复时 `-C <共享目录>` 直接铺回去）、升级本身成功。
+从 `begin` 到 `callback: ok` 共 78 秒，快照耗时约 56 秒——和 486M 的体量相称。
+
+**遗留**：这份快照落在 `@appdata`，而卸载会清空 `@appdata` 内容（P6），
+即「为了回滚而卸载重装」时快照会先被删掉。见 **F35**。
+
+
+### F32 凭据检查永远打印 `credentials: absent`：同一个路径写错 ✅（0.7.2 修复，2026-11-01 18:34 真机验证）
 
 **现象**：7 次升级，7 次 `upgrade_callback: credentials: absent (首次安装或已清除)`——
 但用户一直正常在用 dsh，会话、插件都在。
@@ -1287,6 +1309,19 @@ tar -tzf /vol1/@appdata/dsh/backups/pre-upgrade-*.tar.gz | head   # 首行应为
 | 目录空/不存在 | `credentials: absent（<路径> 尚未初始化，属正常首装）` | 真·首装 |
 
 同一条日志里还会打印解析出的 `home: <路径>`，以后再写错路径一眼就能看出来。
+
+**真机验证（2026-11-01）**，同一天里有天然对照组：
+
+```
+16:10:13 [477439] upgrade_callback: credentials: absent (首次安装或已清除)   ← 0.7.1，旧代码
+17:05:49 [512161] upgrade_callback: credentials: absent (首次安装或已清除)   ← 0.7.1，旧代码
+18:34:25 [544782] upgrade_callback: home: /vol1/@appshare/dsh/workspace/.dsh-home
+18:34:25 [544782] upgrade_callback: credentials: kept（cookie 签名密钥还在，已配对设备无需重新配对）
+```
+
+同台设备、同一份数据，旧代码判 `absent`、新代码判 `kept` 并打印出正确路径——
+这比单看一行 `kept` 更能证明修的是路径而不是别的。升级后桌面图标直接进 dsh，
+未出现配对页，与 `kept` 一致。
 
 
 ### F33 启动日志明文写入完整登录令牌，而这份日志正是要发出去排障的那份 ⚠️（0.7.2 已修）
@@ -1354,6 +1389,37 @@ after : {"url":"…?token=***","token":"***","host":…}
 
 **判据**：手工 `bash /var/apps/dsh/cmd/main start` 后，
 `ls -l /vol1/@appdata/dsh/dsh.pid` 应存在，且 `/var/apps/dsh/var/dsh.pid` **不**出现。
+
+
+### F35 升级快照放在「卸载就会被清空」的目录里：真要回滚时它先没了 ⚠️（待 0.7.3）
+
+**发现方式**：F31 真机验证后顺带看落点——`backup: ok /vol1/@appdata/dsh/backups/…`。
+这个路径正是 **P6** 里实测过的「卸载后目录还在、内容被清空」的那个 `@appdata`。
+
+**为什么是问题**：快照的唯一用途是「升级出事了能退回去」，而 RUNBOOK 4.2 的退路
+就是**卸载（选保留）→ 重装**。两步一叠加：
+
+1. 用户发现新版本坏了，按 RUNBOOK 4.2 卸载；
+2. 卸载清空 `@appdata/dsh` → `backups/pre-upgrade-*.tar.gz` 一起没了；
+3. 重装回来，数据已被升级过程改动过，而唯一的旧副本刚被自己删掉。
+
+也就是说，这份快照能防「升级脚本中途失败」，防不了「升级成功但新版本不好用」——
+而后者恰恰是用户真正会去回滚的场景。另外 `@appdata` 与 `@appshare` 同在 `/vol1`，
+挪位置不产生跨卷拷贝成本。
+
+**修法（计划）**：
+
+1. `cmd/lib-home` 增加 `dsh_backup_dir_for()`：数据目录在共享目录里时，返回
+   `<共享目录的父目录>/backups`（实测即 `/vol1/@appshare/dsh/backups`），
+   否则退回 `$PKGVAR/backups`（老布局兜底）；
+2. `cmd/upgrade_init` 改用它，日志里同时打印 `backup-dir:`；
+3. RUNBOOK 4.2 补一句硬约束：**卸载必须选「保留会话、凭据与设置」**，
+   选「不保留」会连 `@appshare/dsh` 一起删，快照和会话都救不回来；
+4. `probe/05` 断言包内含 `cmd/lib-home` 已有，无需改。
+
+**判据**：装 0.7.3 后 `ls /vol1/@appshare/dsh/backups/` 有新的 `pre-upgrade-*.tar.gz`；
+再走一次「卸载（保留）→ 重装」，该文件仍在（`@appshare` 权限变 000 由
+`install_callback` 自愈，不影响内容）。
 
 
 ---
