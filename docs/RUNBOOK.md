@@ -42,7 +42,7 @@ echo "manifest=$M"; grep -E '^[[:space:]]*version' "$M"
 顺手确认一下仓库里的版本（第 1 步 `git pull` 之后再跑）：
 
 ```bash
-grep -E '^version' ~/dsh-fnos/fpk/manifest    # 应与 README「包版本」一致（本文写于 0.7.3）
+grep -E '^version' ~/dsh-fnos/fpk/manifest    # 应与 README「包版本」一致（本文写于 0.8.0）
 ```
 
 > 为什么必须管：`appcenter-cli install-fpk` 对已装应用只回一句 `is installed`，
@@ -62,7 +62,7 @@ git log --oneline -1
 判据以工作区实际内容为准，不用记 commit 号：
 
 ```bash
-grep '^version' fpk/manifest                      # 与 README「包版本」一致（本文写于 0.7.3）
+grep '^version' fpk/manifest                      # 与 README「包版本」一致（本文写于 0.8.0）
 grep -c '@appshare' fpk/build.sh                  # 必须 > 0（F20 的落点修复在里面）
 ```
 
@@ -88,7 +88,7 @@ grep -c '@appshare' fpk/build.sh                  # 必须 > 0（F20 的落点�
 
 ---
 
-## 第 2 步　打包（5–15 分钟；包内约 997MB，产出 `dsh.fpk` 约 205MB）
+## 第 2 步　打包（5–15 分钟；包内约 1015MB，产出 `dsh.fpk` 约 208MB）
 
 ```bash
 cd ~/dsh-fnos/fpk
@@ -106,7 +106,7 @@ pnpm 自检通过：10.34.9（app/runtime/pnpm 23M）
 npm 自检通过：11.21.1（app/runtime/npm 20M）
 端到端自检通过：pnpm view lodash version -> 4.18.1
 app/ 文件数：6.6 万左右
-产物：./dsh.fpk（约 208M，版本 0.7.3）
+产物：./dsh.fpk（约 208M，版本 0.8.0）
 ```
 
 - **`dsh 版本校验通过：0.2.1-rc.5` 必须是 rc.5**：这行是回读装进来的 `package.json` 得到的，
@@ -562,6 +562,44 @@ appcenter-cli stop dsh && appcenter-cli start dsh
 ```
 
 （注意 wrapper 里是**两级** `../../npm`：`$here` 已经是 `runtime/node/bin`。）
+
+### 5.7　多网卡入口（0.8.0 起，T6）
+
+先看这次到底认出了几个地址：
+
+```bash
+grep -E 'relay=|start: launcher' /var/apps/dsh/var/info.log | tail -3
+grep 'relay:' /var/apps/dsh/var/info.log | tail -4
+```
+
+正常应当有两类行：`start: launcher … on 0.0.0.0:3080`（说明识别到第二个地址）、
+`relay: listening on <第二个地址>:3081 -> <主地址>:3081`。
+
+然后逐个地址验可达（把两个 IP 换成你自己的）：
+
+```bash
+for ip in 192.168.0.114 192.168.0.109; do
+  printf '%-16s healthz=%s dsh=%s\n' "$ip" \
+    "$(curl -s -o /dev/null -m 4 -w '%{http_code}' http://$ip:3080/healthz)" \
+    "$(curl -s -o /dev/null -m 4 -w '%{http_code}' http://$ip:3081/)"
+done
+```
+
+期望两行都是 `healthz=200 dsh=401`。出现 `000` 就是那张网卡没人接住：
+
+| 现象 | 原因 | 动作 |
+|---|---|---|
+| 两个都是 000 | launcher 没起来 | `bash /var/apps/dsh/cmd/main status`；看 info.log 末尾 |
+| 只有主地址 200，另一个 000 | relay 没起 / 绑不上 | `cat /var/apps/dsh/var/relay.pid`；看 `relay:` 行里的 `listen … failed` |
+| healthz 200 但 dsh=403 | dsh 没收到 `--trusted-host` | `tr '\0' ' ' < /proc/$(cut -d' ' -f1 /var/apps/dsh/var/dsh.pid)/cmdline \| grep -o -- '--trusted-host [^ ]*'` |
+| 两个地址都只到跳转器，302 都指向主地址 | `--allow` 没传进去 | `tr '\0' ' ' < /proc/$(cut -d' ' -f1 /var/apps/dsh/var/launcher.pid)/cmdline` |
+
+**最后一步必须用浏览器**：从 `.109` 所在网段的设备打开飞牛桌面 → 点 dsh 图标 →
+地址栏应当是 `http://192.168.0.109:3081/`（**不是 .114**）。这是本轮改动的核心判据：
+跳转目标跟着访问来源走。
+
+> 换 IP（DHCP 续租、切换网段）后，`--host` 仍是安装时那个值，可能已不存在。
+> 目前靠 `cmd/main` 启动时的地址等待 + 失败报错暴露；重启一次应用即可重新探测。
 
 ---
 

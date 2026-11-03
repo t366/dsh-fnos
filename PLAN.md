@@ -15,6 +15,7 @@
 | 能不能不用 Docker？ | **能**。fpk 原生应用完整支持，进程由应用中心的 `cmd/main start\|stop\|status` 驱动，**没有 systemd 集成** |
 | 最大的技术障碍是什么？ | ~~Node 版本~~ → ~~沙箱~~ → **两项均已实测排除**（node 24.22.1 可用；bwrap 在 root 与 `nobody` 下都通过）。剩下的障碍是工程性的：① **866MB / 6.3 万文件**的安装体验；② **token URL 等价于 shell 权限**；③ **升级后不可降级** |
 | 局域网访问怎么做？ | dsh 官方支持：`dsh --profile web --host <局域网IP> --no-open`。**不能用 `0.0.0.0`**（架构层拒绝），必须填具体网卡 IP |
+| 多网卡（.109 / .114 都在）怎么办？ | **0.8.0 已实现**：dsh 仍绑一个地址，其余本机 IPv4 由 `relay` 在 TCP 层原样接住 + `--trusted-host <ip>:<port>` 放行栅栏。**不能用 HTTP 反代**——cookie 绑定 hostname:port，改 Host 就会 401（§5.3） |
 | 有没有认证？ | 有：进程启动时随机 mint 一个 **launch token**，浏览器用它换一枚 **30 天**的 host-only cookie；全站 API 还要过 **Host/Origin 栅栏** |
 | 推荐路线 | **R1：自带 Node 24 + `npm i @deepseek-ai/dsh` 产物**。系统的 `nodejs_v24`（实测 24.22.1）虽可用，但只省 13% 体积、换来"依赖一个可被卸载的商店应用"，不划算（§3.1） |
 | 更新怎么做？ | **只走 fpk 覆盖升级**，不做应用内自更新；升级前强制快照，且**回滚有明确边界**（见 §7） |
@@ -48,8 +49,10 @@
 | 事实 | 出处 | 影响 |
 |---|---|---|
 | `dsh --profile web --host <IP>` 是官方支持的局域网绑定方式，示例里直接写 `--host 10.0.0.7` | `docs/cli-help.md` L184-206 | 局域网方案成立 |
-| **通配地址被拒绝**：`0.0.0.0` 及 IPv4-mapped 形式在 load 阶段报错 | `docs/subsystems/web-server.md` L102、`packages/client/connection/README.md` L47 | 必须探测具体 IP |
+| **通配地址被 CLI 拒绝**：`0.0.0.0` 及 IPv4-mapped 形式在参数解析阶段报错 | `docs/subsystems/web-server.md` L102、`packages/bundle/web-app/src/startup.ts:95` | 正常路径必须探测具体 IP。**补记（2026-11-02）**：该闸门只在 CLI，patch 层写 `webserver.config.host` 能绕过；我们仍不用，见 HARNESS-ARCHITECTURE §5.5 |
 | Host 校验接受三种：loopback、**监听器自己的绑定 IP**（任意端口）、`trustedHosts` | `packages/client/connection/README.md` L47 | 直连 IP 时**无需** `--trusted-host` |
+| **`--trusted-host <authority...>` 可重复、可变参**，取值必须是裸 authority（`host` 或 `host:port`），带路径会让插件 load 失败 | `packages/bundle/web-app/src/startup.ts` L68-120 | 多网卡入口靠它放行其余本机 IP（§5.3） |
+| `--public-url` **可以带路径**，前端与 302 都按请求目录解析；仓库里有「剥前缀代理」的 e2e 用例 | `apps/cli/tests/profiles/web/tests/public-url.expected.e2e.ts` L244-270 | 修正 E3 的旧判断：dsh 侧支持挂载前缀，T7 的成本主要在代理层（§5） |
 | Origin 必须与 Host 同 authority，`sec-fetch-site: cross-site` 一律拒绝 | 同上 | 反向代理必须保留原始 `Host` |
 | 认证 = launch token 换 cookie，只在 `GET /` 与 `/connect` 接受 query token | 同上 L41 | 第一个请求必须是带 token 的 `GET /` |
 | cookie 绑定「规范化 hostname + 端口」，`HttpOnly`、`SameSite=Strict`、默认 30 天 | 同上 L43 | **登录一次管 30 天** |
@@ -392,6 +395,13 @@ resolved 版本与请求不一致时直接失败，避免打出一个"看起来�
 **依赖集有没有新增原生件**、**`cordis.patch.yml` 那套插件接口有没有变**（后者改了我们那份
 DDG 搜索插件要跟着改）。
 
+**2026-11-02 再复核（上游拉到 `0.2.2-alpha.2`）**：dist-tags 未变（`latest` 仍是 rc.5，
+0.2.2 在 `alpha` 上），**继续钉 rc.5**。这次多了一条必须核对的项——**引擎声明**：
+`0.2.2-alpha.2` 的发布包声明 `engines.node >= 24.9.0`（rc.5 的包里没有这个字段），
+而 npm 对 engines 只告警。已在 `build.sh` 加打包期数值门槛、`probe/05` 加装机期判定，
+见 [ISSUES T9](docs/ISSUES.md) 与 [HARNESS-ARCHITECTURE §11](docs/HARNESS-ARCHITECTURE.md)。
+依赖数 86 → 91，新增的 4 个包都是**不挂进 web 形态的独立 bundle**（装上不激活）。
+
 ---
 
 ## 4. 推荐架构
@@ -450,7 +460,7 @@ dsh 每次启动 mint 新 token，而 `app/ui/config` 的 URL 是静态的，塞
 |---|---|---|---|---|
 | E1 手动粘贴 | UI 入口指向裸地址；用户从 `var/dsh-url.txt` 取带 token 的 URL 粘一次 | 零额外组件 | 每次重启都要重取 | 作调试态 |
 | **E2 入口跳转器** | 跳转器占 `service_port`（3080），dsh 退到 `<PORT+1>`；跳转器读 `var/launcher.json` 里的本次令牌后 `302` | 点图标即进（0.5.0 起用户零操作） | 多一个进程/端口 | ✅ v1 已实现 |
-| E3 fnOS 统一网关 | `gatewaySocket` + `gatewayPrefix`，注入 `X-Trim-Userid` | 复用系统域名与登录态 | 要求应用监听 Unix Socket 且路由留在 `gatewayPrefix` 下；dsh 只能监听 TCP 且只服务 `/` | ⏭ 不做 |
+| E3 fnOS 统一网关 | `gatewaySocket` + `gatewayPrefix`，注入 `X-Trim-Userid` | 复用系统域名与登录态 | 应用必须监听 **Unix Socket**，dsh 只会监听 TCP。**但 base path 已经不再是障碍**：`--public-url` 可带路径、配「剥前缀代理」有官方 e2e（§2.1 修正），所以缺的只是 unix-socket↔TCP 那层反代 | ⏭ 推迟（成本从"改 dsh"降到"写一层代理"） |
 
 ### 5.1 E2 的实现（0.5.0：默认自动带令牌）
 
@@ -505,6 +515,31 @@ dsh 的令牌每次启动重新 mint，且没有「固定令牌 / 关闭鉴权�
 
 另一条同源教训：调试 curl 不要用 `-s`，用 `-sS`——否则连自己为什么不工作都看不到。
 
+### 5.1.2 多网卡入口（0.8.0）
+
+真机的两个地址（.109 无线 / .114 OVS）暴露出 E2 的一个隐含前提：跳转器把所有人都送到
+**绑定地址**上。从另一张网卡进来的浏览器能打开跳转器，但被 302 到自己连不上的地址。
+
+不能靠 HTTP 反代解决：dsh 的 cookie 绑定 **hostname + port**，Host/Origin 栅栏在认证之前
+生效（§2.1、HARNESS-ARCHITECTURE §5.3）；代理一改 Host，cookie 的 audience 就对不上，
+表现为"302 过去了，落地立刻 401"。而 dsh 又不接受通配绑定。
+
+所以解法只有一种组合：
+
+```
+dsh    --host <主地址> --port 3081 --trusted-host <其余地址>:3081   ← 栅栏放行
+relay  <其余地址>:3081  ──TCP 原样转发──►  <主地址>:3081            ← 谁接住
+launcher 0.0.0.0:3080  ──302──►  <请求所在地址>:3081                ← 从哪来回哪去
+```
+
+- **relay 是 4 层转发**，不解析 HTTP：Host、cookie、`Upgrade`（`/api/remote.mux`）全部原样，
+  所以 WebSocket 与登录态天然成立；
+- 跳转器的 302 目标来自**白名单**（`--allow`，由 `cmd/main` 传入本机地址），
+  不用请求里的任意 Host——否则 DNS rebinding 可以把 `?token=` 送到攻击者域名；
+- **单网卡不启用**：探测不到第二个地址时，不启 relay、不加 `--trusted-host`、跳转器仍只绑
+  一个地址，与 0.7.x 完全一致；
+- relay 不参与 `status` 判定：它只影响一张网卡，把它算成异常会让应用中心反复重启整个应用。
+
 ### 5.2 前端闭环：为什么安装/卸载也只能在界面里做
 
 用户的要求是「少一行命令」。当前侧载包的现实是：
@@ -551,8 +586,9 @@ dsh/
     ├── runtime/
     │   ├── node/bin/node          ⏳ M1b（build.sh full 注入 node24 二进制）
     │   ├── app/node_modules/...   ⏳ M1b（dsh 本体）
+    │   ├── launcher/server.mjs    ✅ E2 入口跳转器（0.5.0）
+    │   ├── relay/server.mjs       ✅ 多网卡 TCP 中继（0.8.0）
     │   └── stub/server.mjs        ✅ M1 占位服务（M1b 后删除）
-    ├── portal/                    ⏳ M3（E2 入口跳转器）
     └── ui/
         ├── config                 ✅ .url → key 必须 appname 前缀：dsh.main
         └── images/icon-{64,256}.png ✅
@@ -827,7 +863,8 @@ upgrade_init（解包前）→ 解包新 app/ 覆盖 target → upgrade_callback
 | fpk 体积大、文件多，安装慢/失败 | **高**（实测 866MB / 6.3 万文件） | §6.1 瘦身 + `tar.zst` 投递；`install_init` 加磁盘门禁 |
 | dsh 迭代快、破坏性变更频繁 | 中 | 固定版本打包；升级前查 `docs/upgrade-guide/<version>/` |
 | 网关接入需 Unix Socket + 前缀改写，成本被低估 | 低（已排除出 v1） | 明确推迟；v1 走端口 + 跳转器。官方已确认支持 WS，缺的是 dsh 侧适配 |
-| 多网卡/多 IP 选错绑定地址 | **中**（实测双地址） | 启动时探测 + 向导可改；须从客户端实测而不是看默认路由 |
+| 多网卡/多 IP 选错绑定地址 | **低**（0.8.0 已覆盖） | 启动时探测 + 向导可改；其余本机地址由 `relay` 接住并加入 `--trusted-host`（§5.1.2）。待真机 |
+| relay 进程异常导致某张网卡不可达 | 低 | 只写 WARN 不阻塞启动；不参与 `status`，主地址与已在跑的会话不受影响 |
 | **开机时序**：网络未就绪时绑定地址不存在，进程直接 `EADDRNOTAVAIL` 退出 | 中 | `cmd/main start` 做地址等待 + 退避重试（§2.3 第 3 条） |
 | 用户误以为多用户隔离 | 中 | 文档与向导明确"单身份、共享权限" |
 

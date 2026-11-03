@@ -1222,3 +1222,316 @@ grep -E 'upgrade_init: (backup-dir|迁移旧快照|backup: ok)' info.log
 - F30 的「自动写入」分支仍未被真机触发（本机 rc 是 0.7.2 时手工写的，走的是分支 1
   「沿用不覆盖」）。这不影响结案：**分支 1 恰好证明了它不会覆盖用户配置**，
   而分支 2 的路径有本地用例。
+
+---
+
+## 阶段 33（2026-11-02）　先把上游读明白，再动入口（T6 多网卡）
+
+### 33.1　为什么这次先写分析文档
+
+前面的版本都是"撞到问题→查源码→修"。这次反过来：先把 dsh 的整体结构读一遍，
+再拿它的硬约束去筛"哪些适配能做、哪些做了也会被推翻"。产出是
+[`HARNESS-ARCHITECTURE.md`](HARNESS-ARCHITECTURE.md)，结论直接改了三件事的判断：
+
+| 读到的 | 改了什么判断 |
+|---|---|
+| `Config.host` 只接受具体接口字面量，通配在 load 阶段拒绝 | T6 不能"都绑 0.0.0.0"，只能一个地址直服 + 其余接住 |
+| `--trusted-host <authority...>` 可重复，取值必须是裸 authority | 多网卡放行有官方通道，不用改 dsh |
+| cookie 绑定 `hostname:port`，Host/Origin 栅栏在认证之前 | **不能用 HTTP 反代**补地址：一改 Host 就 401 |
+| `--public-url` 可带路径，官方有"剥前缀代理"的 e2e | T7 的 dsh 侧成本被高估了，缺的只是 unix-socket 那一层 |
+| `plugin-manager` 用裸命令 `pnpm`，`view` 再转裸命令 `npm` | F28/F29 不是偶发，是上游写死的依赖链 |
+| 会话 generation 只增不改、SQLite `user_version` 硬失败 | 回滚只能是"代码回退 + 数据回到快照点"，不是配置问题 |
+
+顺带确认了一条**不该做**的需求：T3（端口可配）。`manifest.service_port` 是打包期常量，
+平台的 `checkport` 与桌面入口都读它；运行期改端口只会让平台认为"没起来"。
+已写进台账，避免以后重复排期。
+
+### 33.2　T6 的实现为什么是"中继"而不是"反代"
+
+三个事实叠在一起，只剩一个解：
+
+1. dsh 只能绑一个地址（通配被拒）；
+2. 别的地址上必须有人接住连接；
+3. cookie 的 audience 与 Host/Origin 栅栏都按请求 authority 算 —— 接住它的人**不能改 Host**。
+
+TCP 层原样转发同时满足 1–3，而且 `Upgrade`（`/api/remote.mux` 的 WebSocket）天然透传。
+再给 dsh 加 `--trusted-host <ip>:<port>`，栅栏那一关也过了。
+
+三个组件各管一段：
+
+```
+launcher  0.0.0.0:3080   → 302 到「请求所在地址」:3081（白名单校验）
+relay     <其余IP>:3081  → TCP 原样转发到 <主地址>:3081
+dsh       <主地址>:3081  → --trusted-host <其余IP>:3081
+```
+
+### 33.3　几个当时没想到、写的时候必须处理的点
+
+- **不能排除 `*-ovs` 网卡**。第一版按"虚拟网卡"前缀过滤，差点把默认路由所在的
+  `0e04c6800b7-ovs` 排掉 —— 那正是 .114。排除规则只留 `lo/docker/br-/veth/virbr/tun/tap/zt/tailscale/wg`。
+- **302 目标不能用请求里的任意 Host**。看起来"从哪来回哪去"最简单，但 DNS rebinding
+  可以把 `?token=` 拼到攻击者域名上。所以 `cmd/main` 把本机地址列表通过 `--allow` 传进去，
+  launcher 只认白名单，不在名单里就回退到 `state.host`。
+- **单网卡必须完全不变**。只有探测到第二个地址时才绑 `0.0.0.0`，否则仍绑主地址 ——
+  否则每台单网卡机器都会把 3080 暴露到 docker0 之类的接口上，属于凭空扩大攻击面。
+- **relay 不进 `status`**。它只管一张网卡，算成异常会让应用中心反复重启整个应用，
+  反而打断正在跑的会话。失败只写一行 WARN。
+- **relay 等 dsh 端口就绪后再起**。先起会让早期连接全部 `upstream error`，
+  日志里一堆噪声，还会让用户以为中继坏了。
+
+### 33.4　验了什么、没验什么
+
+本地（Windows，`bash selftest.sh`）：**65 通过 / 32 跳过 / 0 失败**，其中新增 5 条
+（白名单内跳转、白名单外回退、`/healthz` 白名单、中继转发 303、中继日志目标）。
+
+**没验的**：`dsh 模式进程编排`整段在 Windows 上跳过（`kill -TERM -PGID` 语义不同），
+所以"main 真的把 relay 拉起来、dsh 真的收到 `--trusted-host`"这两条只有代码审查，
+**必须在 NAS 上跑一次 `bash selftest.sh`（Linux 上是全绿那条路径）才算数**。
+真机验收判据写在 [ISSUES T6](ISSUES.md#t6-双网卡只有一个地址能进--080-已实现待真机验收)。
+
+### 33.5　改动清单
+
+| 位置 | 改动 |
+|---|---|
+| `docs/HARNESS-ARCHITECTURE.md` | 新增：上游实现原理 + 每条事实对封装的约束 |
+| `fpk/app/runtime/relay/server.mjs` | 新增：多地址 TCP 中继（多 listen、错误隔离、SIGTERM 关闭） |
+| `fpk/app/runtime/launcher/server.mjs` | `--host 0.0.0.0` 支持、`--allow` 白名单、`pickHost()`、`/healthz` 暴露 allow |
+| `fpk/cmd/main` | `local_ipv4_addrs()` / `other_ipv4_addrs()`、`--trusted-host`、`start_relay()`、stop 收尾、幂等补起 |
+| `fpk/selftest.sh` | launcher 白名单 3 条 + relay 2 条 + Linux 编排 6 条；SKIP 计数同步 |
+| `fpk/build.sh` | relay 纳入 CRLF 清理与入口组件完整性检查 |
+| `probe/05-verify-fpk.sh` | 第 6 节改成"逐个本机地址验可达 + relay/trusted-host 检查" |
+| `manifest` | 0.7.3 → **0.8.0** + changelog |
+| 文档 | README / PLAN（§5.1.2、T7 判断修正）/ ISSUES（T3/T6/T7）/ RUNBOOK |
+
+---
+
+## 阶段 34（2026-11-02）　上游拉到 0.2.2-alpha.2：把"适配依据"重新对了一遍
+
+### 34.1　这轮做的是复核，不是加功能
+
+仓库从 `0.2.1-rc.3` 拉到 master HEAD `ce7073d`（`version = 0.2.2-alpha.2`，2026-10-30，
+途中 351 个提交）。上一轮的多网卡方案（0.8.0）是照着 rc.3 的源码推出来的，
+所以第一件事不是写代码，而是**把方案依赖的每一条事实重新在 HEAD 上验一遍**——
+避免"适配做完，上游一升级，依据没了"。
+
+结果：**十条依赖里十条都还在**（表见 `HARNESS-ARCHITECTURE.md` §11.1）。
+连 `--host` 被拒的报错文案、`web` 子命令的参数列表都与 rc.3 逐字相同；
+`SESSION_FORMAT_VERSION` 仍是 4；启动日志仍是 `dsh web: <url>?token=…`。
+也就是说 **0.8.0 的 launcher/relay/trusted-host 三件套不用改**。
+
+### 34.2　唯一真正咬人的变化：引擎声明
+
+`0.2.1-rc.5` 的**发布包**里没有 `engines` 字段；`0.2.2-alpha.2` 声明了 `node >= 24.9.0`
+（仓库里更早就是这个值，只是以前没进 npm 包）。问题在于 npm 对 engines **只告警不失败**：
+
+> 装得上 ≠ 跑得起来。等到运行期才炸，排查成本比打包期失败高一个量级。
+
+两处兜住：
+
+| 位置 | 改动 | 拦在哪一步 |
+|---|---|---|
+| `fpk/build.sh` | `node -v` 解析成 major/minor 判 `>= 24.9`，不达标直接 `die` | 打包 |
+| `probe/05-verify-fpk.sh` | "捆绑的 node"从打印改成 PASS/FAIL 数值判定 | 装机验收 |
+
+我们自带的 `v24.22.1` 本来就是过的，所以这两条**不是修 bug，是防止以后跟版时漏掉**。
+特意用数值判而不是字符串比：`v24.10.0` 与 `v24.9.0` 字符串比会得出相反结论。
+
+### 34.3　版本跟随的结论：继续钉 rc.5
+
+npm 实测 `latest = next = 0.2.1-rc.5`，`alpha = 0.2.2-alpha.2` —— 0.2.2 线**还没转 rc**。
+给 NAS 用户发的包不该跑在 alpha 上，且新增依赖会让体积再涨，所以不跟。
+新增的 4 个包（liveshare / personalized-recommendations / forge-bundle / official-bundles）
+都是自带 `cordis.patch.yml` 的独立 bundle，`web-app` 的补丁里**一行都没挂**，装上不激活。
+
+### 34.4　一个被否掉的"机会"
+
+`0.2.2` 新增了 `sandbox-policy.additionalWritableRoots`（也可用 `--add-dir` 传），
+第一眼看着能解 F23/F24。**不能**：它管的是沙箱允许写哪些根，而 F23/F24 卡的是
+fnOS 授权与选择器导航；会话 cwd 就是用户选的工作区时，`workspace-write` 本来就允许写。
+写进文档，免得以后重复排期。
+
+### 34.5　改动清单
+
+| 位置 | 改动 |
+|---|---|
+| `docs/HARNESS-ARCHITECTURE.md` | 升 v1.1；新增 §11「版本漂移复核」：逐条证据表、变了的三件事、升级决策、被否掉的机会 |
+| `fpk/build.sh` | 打包期 node 引擎门槛（`>=24.9.0`，数值比较） |
+| `probe/05-verify-fpk.sh` | 装机期 node 版本 PASS/FAIL 判定 |
+| `docs/ISSUES.md` | 新增 T9「版本跟随」：dist-tag 现状、门槛兜底、跟版时的三条重验 |
+| `PLAN.md` | §3.2 补 2026-11-02 复核结论 |
+
+### 34.6　顺手验到：升级策略的结构依据
+
+既然翻了源码，就顺手把"只换 runtime、保留 profile"这件事的结构依据查实了：
+`initProfile` 写出的 profile `package.json` 里 **`dependencies` 是空的**，
+官方 bundle 从安装目录解析、不落进 profile；profile 只装第三方插件。
+这解释了三条老观察：换版本不用重建 profile、用户插件在升级后仍在、但插件可能因
+`peerDependencies` 对旧版本而告警（告警而非崩溃，由 `evaluatePluginCompatibility` 判定）。
+web 模板的 bundle 清单从 rc.3 到 0.2.2 **一字未变**（`dsh-base` + `dsh-web-app`），
+只是定义位置从 `app-boot` 挪到了新包 `dsh-official-bundles`。
+
+唯一例外已写进文档：上游若往模板里加 bundle，老 profile 不会自动补
+（`initProfile` 只在 `package.json` 不存在时写），表现为"新功能看不到"，重建 profile 可解但要先备份。
+
+---
+
+## 阶段 35（2026-11-02）　从"能不能装"转到"功能能不能用"：Office 技能
+
+### 35.1　换了个问法
+
+前面 34 个阶段解决的都是"装得上、打得开"。这一轮问的是：**装好之后，dsh 的功能在这台
+NAS 上到底剩几个？** 方法是把上游的功能面按"挂载来源"分三层，再逐个对飞牛的环境。
+
+结论写在新增的 [`HARNESS-FEATURES.md`](HARNESS-FEATURES.md)。一句话：
+
+> 上游没有"缺功能"的问题，只有"这个形态没挂"和"宿主缺外部件"两件事。
+
+### 35.2　最扎眼的一条：152MB 白带了
+
+`base` + `web-app` 是我们的 web 形态，两者都不含 `skill-office`——它只被
+`sdk-app` 形态挂载。可它的渲染引擎 `@deepseek-ai/libreoffice-kit` 是 skill-office 的
+**硬依赖**，会随 dsh 一起装进 `node_modules`；Linux 上没有原生包，npm 自动选
+`libreoffice-kit-wasm`，解包 **152MB**。
+
+也就是说：**从 0.7.x 起，这 152MB 一直在用户硬盘上，却没有一行配置会加载它。**
+"渲染预览 / 公式重算 / 导出 PDF" 三个技能因此一直是不可见的。
+
+这不是 bug，是形态选择带来的沉默成本。修法很轻：加一个 `--patch` 覆盖层插一行。
+
+### 35.3　为什么用 `--patch` 而不是改 profile 的用户补丁层
+
+两个候选：
+
+| 方案 | 问题 |
+|---|---|
+| 改 `profiles/web/cordis.patch.yml` | 那是**用户自己的**文件：升级不该覆盖它，也不该塞进用户看不见的行 |
+| 生成 profile `package.json` | 要动 pnpm 树，会把"官方 bundle"和"用户插件"混在一起 |
+| **`--patch <file>`（选它）** | 命令行参数、优先级最高、随进程生灭、删文件即恢复 |
+
+补丁文件里三个值用 `!!js` 从环境变量取——上游 sdk-app 就是这么写的，同一个解析器
+（`parsePatchList(..., 'overlay')`），不是我们发明的语法。
+
+### 35.4　"缺一就不挂"是刻意的
+
+`skill-office` 在 `assetRoot` / `cli` 不合法时是 **throw**（`src/index.ts:50-71`），
+失败的 fiber 会把整个启动拖死。所以 `cmd/main` 的 `office_patch()` 先逐个验：
+
+```
+assets 目录存在？ → Kit 的 cli.js 存在？ → 自带 node 存在？
+         ↓ 任一为否
+   log "office: skip（原因）"，不传 --patch，命令行与 0.8.0 完全一致
+```
+
+代价是"少挂一次 = 用户看不到 Office"，收益是"永远不会因为增强功能打不开应用"。
+这个方向的取舍没有第二种选法。
+
+### 35.5　打包期就把语法验掉
+
+补丁写错 = dsh 解析阶段退出 = 应用装好了打不开。这种错不该留到装机才发现，
+所以在 `build.sh` 里用 **dsh 自己带的 `yaml` 包**（`createRequire` 从安装树解析，
+不引新依赖）真解析一遍，并断言结构：顶层是数组、第一行是 `insert`、
+`id`/`name` 对、`config` 三个键齐。校验不过直接 `die`，不出包。
+
+本地用同一段逻辑跑过（`.tmp/lint.mjs` + 一个假安装树），`!!js` 标量能正确解析成表达式字符串。
+
+### 35.6　验了什么、没验什么
+
+| 项 | 结果 |
+|---|---|
+| `office_patch()` 三路径齐全 → enabled，env 正确导出 | 本地桩环境实测 ✅ |
+| 资产目录缺失 → skip 且带原因，不导出 env | 本地桩环境实测 ✅ |
+| 补丁 YAML 结构 | 真实 `yaml@2.9.1` 解析通过 ✅ |
+| `cmd/main` / `build.sh` / 两个 probe 脚本语法 | `bash -n` 全过 ✅ |
+| **wasm 渲染真的能出 PDF** | ❌ 未验。必须真机：这是唯一能证明 152MB 没白带的判据 |
+| **中文 PDF 不缺字** | ❌ 未验。查 Kit README 时才发现的前提：Linux 走 WASM，而 WASM「只用导入的字体，找不到可用字体就以 unavailable 拒绝」。飞牛是最小化 Debian，很可能只有西文字体——PDF 能出、中文是方块。已在 `probe/01` 加 CJK 字体探测，并写进 ISSUES F37 的验收判据 |
+| 补丁在真 dsh 上能否正常注册 | ❌ 未验。判据写进 ISSUES F37：`var/info.log` 出现 `office: enabled` 且界面能导出 PDF |
+
+### 35.7　改动清单
+
+| 位置 | 改动 |
+|---|---|
+| `docs/HARNESS-FEATURES.md` | 新增：功能三层分类、能力矩阵、两处边界（Office 作者类 / 定时任务）、下一步建议 |
+| `fpk/app/runtime/profile/office.patch.yml` | 新增：`insert` 一行挂 `skill-office`，三值取自环境变量 |
+| `fpk/cmd/main` | `office_patch()` + 启动时按需传 `--patch`；日志写 `office: enabled/skip` |
+| `fpk/build.sh` | 补丁结构校验（用安装树里的 yaml）；full 模式强制文件存在；CRLF 清理纳入 |
+| `probe/05-verify-fpk.sh` | 资产/Kit 存在性；日志里 `office:` 行判定 |
+| `probe/01-preflight.sh` | 报告 `python3` 与 python-docx/openpyxl/python-pptx 是否存在 |
+| `manifest` | 0.8.0 → **0.8.1** + changelog |
+| 文档 | README（版本行、Office 行、文档索引）、`fpk/README.md` 组件表、ISSUES F37 |
+
+---
+
+## 阶段 36（2026-11-02）　把社区同类项目读了一遍：三条经验不能用，一条路线可以照
+
+### 36.1　为什么现在读别人的实现
+
+前面 35 个阶段都是「撞到问题 → 查上游源码 → 修」。这条路径的盲区是**不知道自己漏了什么**：
+T7（网关）一直挂在台账上，就是因为没人见过「飞牛上跑通网关的 dsh」长什么样。
+这次把公开的 5 个 fpk 封装项目逐个读了 README，重点看**入口与绑定**这一层，
+因为它是所有差异的源头。结论写进 [`REFERENCE-PROJECTS.md`](REFERENCE-PROJECTS.md)。
+
+一个总印象：**能查到基线的四个项目全是 0.1.x**（最高 0.1.7-rc.2 线），我们钉的是 0.2.1-rc.5。他们代码里一半以上
+的运行时补丁，补的是我们这版已经没有的问题。所以这一轮的价值不在于「抄」，
+而在于**把他们的说法拿回我们的源码上验一遍**——验完有三条不能用。
+
+### 36.2　被源码推翻的三条
+
+| 社区说法 | 我们的源码 | 结论 |
+|---|---|---|
+| 「通配地址在 load 阶段被拒绝」（我们自己也这么写过） | `isWildcardHost` 唯一调用点 `web-app/src/startup.ts:95`，只校验 `--host`；`webserver/src/index.ts:621` 直接 `listen(port, config.host)` | **只对 CLI 成立**。patch 层写 `webserver.config.host: 0.0.0.0` 真能绑通配（techysy 就这么做） |
+| 「`--trusted-host` 重复写只保留最后一个」 | `web-app/tests/startup.spec.ts:100-117` 断言三个值**累积** | 我们 `cmd/main` 的 `trusted+=(--trusted-host …)` **是对的，不用改** |
+| 「必须注入 `crypto.randomUUID` Polyfill」（局域网 HTTP 非安全上下文） | `util/crypto/src/index.ts` 用 `getRandomValues` 自拼 v4；`crypto.subtle` 只在原生壳分支；剪贴板有 `execCommand` 回退 | **0.8.1 不需要补**。最多是右键菜单里几处直接调 `navigator.clipboard` 的按钮会静默失败 |
+
+第一条最要紧：它把我们 0.8.0 的**技术理由**改掉了。原来写的是「架构层拒绝，做不到」，
+实际是「上游不希望，但 patch 能绕过，我们选择不做」。文档已按后者改
+（`HARNESS-ARCHITECTURE` §5.1 更正 + 新增 §5.5、`PLAN` §4 补记、`README` 版本行）。
+
+### 36.3　明知能绑 0.0.0.0，为什么还留着 relay
+
+这不是固执，是三条具体的暴露面：
+
+1. 通配 = **所有**接口，包含 `docker0` / `br-*` / `veth`。这台 NAS 跑 docker；
+2. 我们的 launcher 在 `auto` 模式下会把 `?token=` 发给任何能到 3080 的客户端——
+   容器只要够到 3080 就能拿到令牌，此时再让 3081 也通配，等于把 bash 工具面完整交出去；
+3. techysy 的做法要**每次启动重写用户自己的** `profiles/web/cordis.patch.yml`，
+   或者我们另养一个语义与上游相反的 `--patch` 覆盖层。
+
+代价是每个额外地址一个监听器，这个代价可测、可关（单网卡不启用）；
+前两条出问题不可逆。判断写进 §5.5，避免以后有人「优化」掉 relay。
+
+### 36.4　T7 的路线定了：学 YUNXI 的形态，但不用它的实现
+
+`YUNXI-fi/DeepSeek-Harness-fnos` 是唯一把网关跑通的：`ui/config` 用 `iframe` +
+`app.sock`，代理剥掉 `/app/deepseekharness` 前缀，**并改写响应体里的 `/assets`、`/api`
+绝对路径**，WS 透传。
+
+形态对，实现不必照抄：上游有 `--public-url <带前缀 URL>` 的 e2e（§5.4），资源路径与
+302 会按前缀生成。所以我们的代理只做「收 socket、剥前缀、转 TCP」，**不碰 HTML/JS**——
+少一处「上游换资源路径就坏」的耦合。`techysy` 的 `trusted_hosts.conf`（`fnos.net` /
+`5ddd.com` / 自定义域名）也要一起做，否则网关转发的 Host 过不了栅栏。
+
+这一条已写进 ISSUES T7 的补充，**本轮不实现**：0.8.0/0.8.1 还没真机验收，
+再叠一个未验证的大改动只会让「哪个改动坏了」变得不可判。
+
+### 36.5　本轮唯一的代码改动：架构门禁
+
+社区项目都出 x86 + ARM 两套。我们的 `build.sh` 里 node 来自 `NODE_SRC`、依赖用本机 npm
+装，产物天然绑定打包机架构，但 `manifest` 写死 `platform="x86"`，**之前没有任何检查**。
+在 ARM 机器上打包会得到一个声明 x86 的包：要么被应用中心拒，要么装上了跑不起来。
+
+现在版本检查后加一段：`uname -m` → `x86_64|amd64 → x86`、`aarch64|arm64 → arm`，
+不一致直接 `die`；`platform="all"` 也拒绝（fnOS 规范：含架构二进制时不能用 `all`）。
+逻辑用 5 种架构 × 3 种声明离线跑过（x86_64/amd64/aarch64/arm64/riscv64）。
+
+没有做的：真正的 ARM 出包。得在 ARM 机器上跑，并单独验 `bwrap`/landlock——
+F21 的结论是 x86 上非特权 userns 可用，不能假设 ARM 一样。
+
+### 36.6　改动清单
+
+| 位置 | 改动 |
+|---|---|
+| `docs/REFERENCE-PROJECTS.md` | 新增：5 个项目总表、4 条入口路线、3 条被推翻的说法、采纳/拒绝矩阵、剩余差距、复核命令 |
+| `fpk/build.sh` | 架构一致性门禁（含 `platform="all"` 拒绝） |
+| `docs/HARNESS-ARCHITECTURE.md` | §5.1 更正（闸门只在 CLI）+ 新增 §5.5（为何仍用 relay）+ §11.1 措辞修正 |
+| `docs/ISSUES.md` | T7 补两条实现参考；新增 T12（双架构）；T13（安全上下文 API，已核） |
+| `PLAN.md` / `README.md` | 同一处事实的措辞修正；文档索引加 REFERENCE-PROJECTS |

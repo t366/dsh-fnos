@@ -23,8 +23,14 @@
 // 不做的事：不代理任何业务流量（只回 302）。代理就要改写 Host，
 // 会破坏 dsh 的 Host/Origin 栅栏，那是另一个量级的问题。
 //
-// 参数：--host <bind ip> --port <listen port> --state <launcher.json>
-//       [--auth auto|pair]
+// 多网卡：--host 可以是 0.0.0.0（跳转器自己允许通配；dsh 不允许，所以 dsh 的
+// 其它地址靠 relay 接住）。此时「把浏览器送到哪个地址」不能再用 state.host ——
+// 那会把从 .109 进来的访客送到 .114，跨网段就是连不上。改为按请求的 Host 选，
+// 但**只认白名单里的本机地址**（--allow，由 cmd/main 探测后传入）。
+// 不认任意 Host：否则 DNS rebinding 能把 ?token= 送到攻击者域名。
+//
+// 参数：--host <bind ip | 0.0.0.0> --port <listen port> --state <launcher.json>
+//       [--auth auto|pair] [--allow ip1,ip2,...]
 // ============================================================================
 
 import http from 'node:http';
@@ -42,6 +48,24 @@ const HOST = opt('--host', '127.0.0.1');
 const PORT = Number(opt('--port', '3080'));
 const STATE_FILE = opt('--state', '');
 const AUTH = String(opt('--auth', 'auto') || 'auto').toLowerCase() === 'pair' ? 'pair' : 'auto';
+
+// 允许出现在 302 目标里的本机地址。空集合 = 旧行为（只用 state.host）。
+// 只收 IP 字面量：主机名要额外解析，且用户在桌面里用的域名不一定通到 dsh。
+const ALLOW = new Set(
+  String(opt('--allow', '') || '')
+    .split(/[,\s]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => /^([0-9]{1,3}\.){3}[0-9]{1,3}$/.test(s))
+);
+
+/** 从 Host 头里取 IPv4 字面量；带端口、带方括号都归一掉，其它返回 ''。 */
+function hostLiteral(req) {
+  const raw = String(req.headers.host || '').trim().toLowerCase();
+  if (!raw) return '';
+  const bare = raw.replace(/^\[/, '').replace(/\]$/, '');
+  const m = /^([0-9]{1,3}(?:\.[0-9]{1,3}){3})(?::\d+)?$/.exec(bare);
+  return m ? m[1] : '';
+}
 
 const COOKIE = 'dsh_gate';
 const COOKIE_MAX_AGE = 180 * 24 * 3600;
@@ -117,7 +141,19 @@ function readState() {
 // 把「本次启动的令牌」拼成对外的入口地址。
 // 不能直接用 state.url：那是 dsh 自己打印的，主机名可能是 127.0.0.1 或
 // localhost，照抄会把浏览器送到用户自己的电脑上。
-function targetUrl(st) {
+//
+// 主机名的选择顺序：
+//   1) 请求自己的 Host 是白名单里的本机地址 → 用它（多网卡：从哪进来就回哪去）
+//   2) 否则用 state.host（绑定地址）——包括回环来源，因为 dsh 没监听回环，
+//      把浏览器送到 127.0.0.1 只会得到一个拒绝连接
+function pickHost(st, req) {
+  const fallback = st.host && !LOOPBACKS.has(st.host) ? st.host : '127.0.0.1';
+  if (!req || ALLOW.size === 0) return fallback;
+  const lit = hostLiteral(req);
+  return lit && ALLOW.has(lit) ? lit : fallback;
+}
+
+function targetUrl(st, req) {
   let tok = typeof st.token === 'string' ? st.token.trim() : '';
   if (!tok) {
     // 与 cmd/main 的抓取规则保持一致：不写死字符集（见那里的注释）。
@@ -133,7 +169,7 @@ function targetUrl(st) {
     const u = new URL(st.url);
     if (u.searchParams.get('token')) pathPart = u.pathname + u.search;
   } catch {}
-  return `http://${st.host}:${st.port}${pathPart}`;
+  return `http://${pickHost(st, req)}:${st.port}${pathPart}`;
 }
 
 // ---------------------------------------------------------------- 来源判定
@@ -339,9 +375,16 @@ const handler = async (req, res) => {
 
   if (url.pathname === '/healthz') {
     const st = readState();
-    const target = st ? targetUrl(st) : '';
+    const target = st ? targetUrl(st, req) : '';
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-    res.end(JSON.stringify({ ok: true, ready: !!st, auto: AUTH === 'auto' && !!target, mode: AUTH }));
+    res.end(JSON.stringify({
+      ok: true,
+      ready: !!st,
+      auto: AUTH === 'auto' && !!target,
+      mode: AUTH,
+      // 多网卡排障用：只有这些地址会被写进 302 的目标（不含 token）
+      allow: [...ALLOW],
+    }));
     return;
   }
   if (url.pathname === '/favicon.ico') {
@@ -372,7 +415,7 @@ const handler = async (req, res) => {
     const code = await probeToken(st, token);
     if (code >= 300 && code < 400) {
       log(`pair: ok ip=${ip} (dsh ${code})`);
-      redirect(res, `http://${st.host}:${st.port}/?token=${encodeURIComponent(token)}`, {
+      redirect(res, `http://${pickHost(st, req)}:${st.port}/?token=${encodeURIComponent(token)}`, {
         'set-cookie': newGateCookie(),
       });
       return;
@@ -391,7 +434,7 @@ const handler = async (req, res) => {
     return;
   }
 
-  const target = targetUrl(st);
+  const target = targetUrl(st, req);
 
   // ---- auto：点图标直接进 ----
   if (AUTH === 'auto') {
@@ -420,7 +463,7 @@ const handler = async (req, res) => {
     // 比让用户对着「正在启动」转圈强。首次访问没有 cookie 时才走后面的提示页。
     if ((req.headers.cookie || '').trim()) {
       log(`auto: no token but cookie present, redirect bare ip=${ip}`);
-      redirect(res, `http://${st.host}:${st.port}/`);
+      redirect(res, `http://${pickHost(st, req)}:${st.port}/`);
       return;
     }
     const since = Number(st.since) || 0;
@@ -460,7 +503,10 @@ server.on('error', (e) => {
 });
 
 server.listen(PORT, HOST, () => {
-  log(`listening on http://${HOST}:${PORT} (auth=${AUTH} state=${STATE_FILE || 'none'})`);
+  log(
+    `listening on http://${HOST}:${PORT} (auth=${AUTH} state=${STATE_FILE || 'none'}` +
+      ` allow=${ALLOW.size ? [...ALLOW].join(',') : 'none'})`
+  );
 });
 
 // 回环也要有监听：应用中心的「运行中」判定与本机自检连的都是 127.0.0.1。

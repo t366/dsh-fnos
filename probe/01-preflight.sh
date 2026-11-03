@@ -198,6 +198,39 @@ fi
 if have pnpm; then line "- pnpm：\`$(pnpm -v 2>/dev/null)\`"; else line "- pnpm：未安装（只有 git 源码路线才需要）"; fi
 if have npm;  then line "- npm：\`$(npm -v 2>/dev/null)\`";  fi
 if have git;  then line "- git：\`$(git --version 2>/dev/null)\`"; fi
+# Office 作者类技能（docx/xlsx/pptx）要 Python 库；web 形态没有 workspace-dependencies
+# 工具可借，只能落到宿主环境。这里只"报告"，不判定失败——缺了不影响核心功能。
+if have python3; then
+  PYV="$(python3 -V 2>&1)"
+  PYLIB="$(python3 - <<'PY' 2>/dev/null
+mods = [('docx', 'python-docx'), ('openpyxl', 'openpyxl'), ('pptx', 'python-pptx')]
+ok = []
+for m, name in mods:
+    try:
+        __import__(m); ok.append(name)
+    except Exception:
+        pass
+print(','.join(ok) or '无')
+PY
+)"
+  line "- python3：\`$PYV\`；Office 库：\`${PYLIB:-?}\`"
+else
+  line "- python3：未安装（Office 作者类技能不可用，操作类不受影响）"
+fi
+# Office 转 PDF / 渲染在 Linux 上走 WASM，而 WASM "只用导入的字体，
+# 找不到可用字体就以 unavailable 拒绝"。飞牛是最小化 Debian，很可能只有西文字体——
+# 那样 PDF 能出但中文缺字。这里只报告，判定留给人：有 CJK 才能说"中文导出没问题"。
+if [ -d /usr/share/fonts ] || [ -d "$HOME/.fonts" ]; then
+  FCNT="$(find /usr/share/fonts "$HOME/.fonts" "$HOME/.local/share/fonts" -type f \
+            \( -iname '*.ttf' -o -iname '*.otf' -o -iname '*.ttc' \) 2>/dev/null | wc -l | tr -d ' ')"
+  CJK="$(find /usr/share/fonts "$HOME/.fonts" "$HOME/.local/share/fonts" -type f \
+            \( -iname '*cjk*' -o -iname '*noto*sans*sc*' -o -iname '*wqy*' -o -iname '*droidsansfallback*' \) 2>/dev/null | head -3 | tr '\n' ' ')"
+  if [ -n "$CJK" ]; then
+    line "- 字体：\`${FCNT:-0}\` 个，含中文字体：\`$CJK\`"
+  else
+    line "- 字体：\`${FCNT:-0}\` 个，**未发现中文字体**（Office 导出的中文 PDF 可能缺字）"
+  fi
+fi
 
 line ""
 line "### 4b. fnOS 自带 Node 应用（可能省掉整套自带运行时）"

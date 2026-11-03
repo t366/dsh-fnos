@@ -55,7 +55,7 @@ find cmd -type f -exec sed -i 's/\r$//' {} + 2>/dev/null || true
 for f in app/ui/config wizard/* manifest; do
   [ -f "$f" ] && sed -i 's/\r$//' "$f" 2>/dev/null || true
 done
-for f in app/runtime/stub/server.mjs app/runtime/launcher/server.mjs; do
+for f in app/runtime/stub/server.mjs app/runtime/launcher/server.mjs app/runtime/relay/server.mjs app/runtime/profile/office.patch.yml; do
   [ -f "$f" ] && sed -i 's/\r$//' "$f" 2>/dev/null || true
 done
 
@@ -108,6 +108,27 @@ mval() { # $1=文件 $2=键 —— 安装后的 manifest 会被 fnOS 重写，�
 }
 PKG_APP="$(mval manifest appname)"
 PKG_VER="$(mval manifest version)"
+
+# ---------------------------------------------------------------- 2b. 架构
+# manifest 的 platform 是安装期门禁，而这个包的 node 与 node_modules 都是
+# 「就地取宿主」的：node 从 $NODE_SRC 复制、依赖用本机 npm 装。所以只能在目标
+# 架构上打包。声明与实际不一致时，产出的包要么被应用中心拒绝，要么装上了
+# 「跑不起来」——两种都比打包期失败难查。参考项目里双架构都是各自 CI 任务，
+# 同一份产物不可能两边通用；这里至少把「在 x86 上打出 arm 包」这种事挡住。
+step "架构"
+HOST_ARCH="$(uname -m 2>/dev/null || echo unknown)"
+case "$HOST_ARCH" in
+  x86_64|amd64)  EXPECT_PLATFORM=x86 ;;
+  aarch64|arm64) EXPECT_PLATFORM=arm ;;
+  *)             EXPECT_PLATFORM="" ;;   # 其它架构不猜，只提示
+esac
+DECL_PLATFORM="$(mval manifest platform 2>/dev/null || true)"
+if [ -n "$EXPECT_PLATFORM" ] && [ "${DECL_PLATFORM:-}" != "$EXPECT_PLATFORM" ]; then
+  die "架构不一致：manifest 的 platform=\"${DECL_PLATFORM:-<空>}\"，当前机器是 $HOST_ARCH（应为 $EXPECT_PLATFORM）。
+本包的 node 与 node_modules 都取自本机，跨架构打出来的包在目标机上跑不起来。
+把 manifest 的 platform 改成 $EXPECT_PLATFORM 后重打；要同时支持两种架构，请在各自架构的机器上各打一次。"
+fi
+say "ok：$HOST_ARCH → platform=${DECL_PLATFORM:-未声明}"
 
 # 已装版本的来源不能只看 /var/apps/<app>。
 # 2026-10-27 23:44 实测：应用明明在跑（3080/healthz 200），但 /var/apps/dsh 不存在，
@@ -296,6 +317,19 @@ if [ "$MODE" = "full" ]; then
   NODE_VER="$("$NODE_SRC/bin/node" -v)"
   say "node: $NODE_VER ($NODE_SRC)"
 
+  # 引擎门槛：dsh 从 0.2.2 起在**发布出去的包里**声明 engines.node >= 24.9.0
+  # （0.2.1-rc.5 的包里没有这个字段，所以这条门槛是新加的约束，不是老问题）。
+  # npm 默认只对 engines 告警、不失败，于是"能装上"不等于"跑得起来"——
+  # 这里在打包阶段就拦，避免打出一个装得上但运行期炸的包。
+  NODE_MAJ="${NODE_VER#v}"; NODE_MAJ="${NODE_MAJ%%.*}"
+  NODE_MIN="${NODE_VER#v*.}"; NODE_MIN="${NODE_MIN%%.*}"
+  case "$NODE_MAJ" in ''|*[!0-9]*) die "无法解析 node 版本：$NODE_VER" ;; esac
+  case "$NODE_MIN" in ''|*[!0-9]*) NODE_MIN=0 ;; esac
+  if [ "$NODE_MAJ" -lt 24 ] || { [ "$NODE_MAJ" -eq 24 ] && [ "$NODE_MIN" -lt 9 ]; }; then
+    die "node $NODE_VER 低于 dsh 要求的 >=24.9.0；升级飞牛的 nodejs_v24 应用，或用 NODE_SRC 指向 >=24.9 的 node"
+  fi
+  say "node 满足 dsh 引擎要求（>=24.9.0）"
+
   # 只清运行时产物，保留 stub：npm 一旦失败，包还能以骨架模式打出来，
   # 不至于把 NAS 上这份源码目录弄成「两种模式都打不了」。
   rm -rf app/runtime/node app/runtime/app
@@ -327,6 +361,31 @@ if [ "$MODE" = "full" ]; then
     fi
     [ "$GOT" = "$DSH_VERSION" ] || die "版本不符：请求 $DSH_VERSION，实际装到 ${GOT:-未知}"
     say "dsh 版本校验通过：$GOT"
+
+    # ---- Office 补丁的静态校验（用 dsh 自己带的 yaml 解析器，不引入新依赖）----
+    # 这份补丁只在命令行上生效一次，写错了会让 dsh 在解析阶段直接退出——
+    # 那意味着"应用装好了但打不开"。所以在打包期就用真实的解析器过一遍，
+    # 校验不过就别出包，而不是等用户装机后发现起不来。
+    "$NODE_SRC/bin/node" -e '
+      const { createRequire } = require("node:module");
+      const [patchFile, appDir0] = process.argv.slice(1);
+      const appDir = require("node:path").resolve(appDir0);
+      const req = createRequire(appDir + "/package.json");
+      let YAML;
+      try { YAML = req("yaml"); } catch { console.log("SKIP: 安装树里没有 yaml 解析器"); process.exit(0); }
+      const text = require("node:fs").readFileSync(patchFile, "utf8");
+      const doc = YAML.parse(text, { customTags: [{ tag: "tag:yaml.org,2002:js", resolve: v => v }] });
+      const fail = m => { console.error("FAIL: " + m); process.exit(1); };
+      if (!Array.isArray(doc) || doc.length === 0) fail("顶层必须是 patch 数组");
+      const row = (doc[0].insert || [])[0];
+      if (!row) fail("缺少 insert 行");
+      if (row.id !== "skill-office") fail("行 id 应为 skill-office，实际 " + JSON.stringify(row.id));
+      if (row.name !== "@deepseek-ai/dsh-skill-office") fail("行 name 不对");
+      for (const k of ["assetRoot", "cli", "node"]) {
+        if (!row.config || !(k in row.config)) fail("config 缺 " + k);
+      }
+      console.log("OK: Office 补丁可解析");
+    ' ../profile/office.patch.yml "$PWD" || die "Office 补丁校验失败（见上）"
   )
 
   # ---- pnpm：dsh 装插件时唯一的包管理器（版本理由见文件头 DSH_PNPM_VERSION）----
@@ -436,6 +495,17 @@ WRAP
 else
   [ -f app/runtime/stub/server.mjs ] || die "骨架模式下缺少 app/runtime/stub/server.mjs"
   say "骨架模式：使用占位服务"
+fi
+
+# 入口链路的两个组件在两种模式下都必须存在：缺 launcher 就点不开图标，
+# 缺 relay 则多网卡机器只有一个地址能用（不致命，但登录体验会退化成旧版）。
+for f in app/runtime/launcher/server.mjs app/runtime/relay/server.mjs; do
+  [ -f "$f" ] || die "缺少入口组件：$f"
+done
+
+# Office 补丁只在 dsh 模式用得上（骨架包里没有 dsh），所以只在 full 模式下强制。
+if [ "$MODE" = "full" ]; then
+  [ -f app/runtime/profile/office.patch.yml ] || die "缺少 Office 补丁：app/runtime/profile/office.patch.yml"
 fi
 
 # ---------------------------------------------------------------- 5. 体积统计

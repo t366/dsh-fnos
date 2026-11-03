@@ -11,11 +11,14 @@
 
 | 项 | 值 |
 |---|---|
-| 包版本 | **0.7.3**（**已在 NAS 真机装成并验收**）。相对 0.7.2 只动两处：升级快照改落 `@appshare/dsh/backups`（`@appdata` 会被卸载清空，见 [F35](docs/ISSUES.md)），并自动搬迁旧快照；`main` 启动时按 `profiles/*/node_modules/.modules.yaml` 记录的 `storeDir` 自动对齐 pnpm store，插件安装不再需要手工写配置（[F30](docs/ISSUES.md)）。<br>真机 2026-11-01 19:18：新快照 486M 落在新目录、0.7.2 那份旧包同卷 `mv` 过来（mtime 未变）、`pnpm-store: 沿用已有配置` 未覆盖手工配置。<br>0.7.2 的验收一并保留：快照真会打（486M）、凭据判据不再误报、日志令牌打码实测 0 命中 |
+| 包版本 | **0.8.1（代码与本地自测完成，待真机验收）**。相对 0.7.3 两件事：<br>① **0.8.0 多网卡入口**：dsh 的 CLI 拒绝「通配地址」，只接受某个具体接口的 IP（[HARNESS-ARCHITECTURE §5.1](docs/HARNESS-ARCHITECTURE.md)），所以以前只有被选中的那个地址能进——真机 .109（无线）/ .114（OVS）并存时，从另一个网段点图标就是连接被拒。现在启动时枚举本机 IPv4：dsh 仍绑主地址，其余地址由新增的 `relay` 在 **TCP 层**原样接住（不改 Host、不改字节，WS 与 cookie 都不受影响），并登记进 `--trusted-host`；跳转器改为通配监听、按「请求从哪个地址进来」选 302 目标（白名单校验，防 DNS rebinding）。单网卡机器行为不变。<br>② **0.8.1 Office 技能**：web 形态默认不挂 `skill-office`，而它的渲染引擎早随 dsh 装进了包里（wasm，约 152MB，一直闲置）。现在用 `--patch` 覆盖层挂上，换来「渲染预览 / 公式重算 / 导出 PDF」，**失败即降级**（三条路径缺一就不传 `--patch`）。<br>本地自测 65 通过 / 32 跳过 / 0 失败（Windows；dsh 编排段需 Linux） |
+| 上一版验收 | **0.7.3 已在 NAS 真机装成并验收**：升级快照改落 `@appshare/dsh/backups`、`main` 启动时按 `.modules.yaml` 自动对齐 pnpm store |
 | 最近一次完整真机验收 | **0.6.7**：图标、启停入口、「访问权限」页均已确认；0.5.0 时为 `probe/05` **33 PASS / 1 WARN / 0 FAIL**、`probe/07` **10 PASS / 0 FAIL**。待验项见 [ISSUES 的 P1/P2](docs/ISSUES.md) |
 | 数据落点 | 共享目录 `dsh/workspace/.dsh-home`（**跨卸载存活**，已实测） |
 | 默认工作区 | `dsh/workspace/deepseek-harness/default-workspace`（0.6.6 起自动建；原理见 [ISSUES F22](docs/ISSUES.md)） |
 | 任意文件夹当工作区 | 应用设置 →「访问权限」授权目录（读写）→ dsh 里「+ 添加工作区」→ 点首屏的 **「可访问目录」** 选中（0.6.8 起；见 [ISSUES F23](docs/ISSUES.md) / [F24](docs/ISSUES.md)） |
+| 多网卡访问 | 0.8.0 起自动：主地址由 dsh 直服，其余本机 IPv4 由 `relay` 接住并加入 `--trusted-host`。手工指定用 `DSH_EXTRA_IPS=192.168.0.109,192.168.0.114`（逗号分隔，排障用） |
+| Office 文档 | 0.8.1 起 **渲染预览 / 公式重算 / 导出 PDF** 可用（dsh 自带的 LibreOffice Kit，无需系统装 LibreOffice）。**生成** docx/xlsx/pptx 需要宿主 Python 库，见 [HARNESS-FEATURES §3.1](docs/HARNESS-FEATURES.md) |
 | 运行时 | 自带 Node 24（`v24.22.1`）+ `@deepseek-ai/dsh@0.2.1-rc.5`（0.7.1 起；钉版理由与升级记录见 [PLAN §3.2](PLAN.md)） |
 | 插件 | 0.7.0 起运行时**成套自带 pnpm 10.34.9 + npm 11.21.1**（`runtime/pnpm`、`runtime/npm`，各配 `runtime/node/bin/` 下的 wrapper）。dsh 装插件只 spawn 裸命令 `pnpm`（缺了报 `spawn pnpm ENOENT`，[F28](docs/ISSUES.md)），而 pnpm 的 `view`/`add` 又会把请求转发给裸命令 `npm`（缺了会落到系统那份 10.9.3，被自带 node 24 跑起来就崩，[F29](docs/ISSUES.md)）。插件装进 `.dsh-home` 下的 profile 子目录，**需要能访问 npm registry**（默认 npmmirror），装完重启应用一次才加载 |
 | 尺寸 | 包内 `app/` **约 1014MB / 6.6 万个文件**（0.7.0 的 pnpm+npm 约 +37MB）；fnpack 压出的 **`dsh.fpk` 约 208MB**（0.6.8 实测 199MB）；装完实测 **957M / 63056 个文件**（0.6.8，`du -sh /vol1/@appcenter/dsh`，不含软链的 `/var/apps/dsh`） |
@@ -31,6 +34,9 @@
 |---|---|---|
 | `README.md`（本文） | 所有人 | 项目是什么、现在什么状态、文档怎么找 |
 | [docs/DEVLOG.md](docs/DEVLOG.md) | 维护者 | **开发记录**：按时间/版本记改了什么、为什么改、验证结果 |
+| [docs/HARNESS-ARCHITECTURE.md](docs/HARNESS-ARCHITECTURE.md) | 维护者 | **上游实现原理**：Cordis 插件树、轮次流程、会话日志、Web 载体与栅栏、沙箱、插件链；以及每条事实对 fpk 封装的硬约束 |
+| [docs/HARNESS-FEATURES.md](docs/HARNESS-FEATURES.md) | 维护者 / 用户 | **功能清单**：哪些开箱可用、哪些要开关、哪些在飞牛上不可用（含依据）；以及本轮 Office 适配的做法与边界 |
+| [docs/REFERENCE-PROJECTS.md](docs/REFERENCE-PROJECTS.md) | 维护者 | **社区同类项目**：5 个 fpk 封装的技术路线对比、三条被源码推翻的社区经验、采纳/拒绝矩阵、剩余差距 |
 | [docs/ISSUES.md](docs/ISSUES.md) | 维护者 / 使用者 | **问题台账**：开头「当前剩余问题（P0–P3）」是**唯一待办来源**；后接平台限制、已修缺陷、待验证项的根因与处置 |
 | [docs/RUNBOOK.md](docs/RUNBOOK.md) | 维护者 | **上真机清单**：打包 → 手动安装（覆盖升级）→ 验收，逐条可复制 |
 | [PLAN.md](PLAN.md) | 维护者 | 技术方案与决策依据（含 fnOS 生命周期、目录布局、运行时选型、安全模型） |
@@ -44,7 +50,7 @@
 fpk/                    应用本体（打包成 dsh.fpk）
   manifest              应用元数据：appname=dsh、service_port=3080、桌面入口 dsh.main
   cmd/                  main(start|stop|status|restart|url) + install/config/uninstall 钩子
-  app/runtime/          launcher（入口跳转器）、stub（骨架包占位服务）、node、app（dsh 本体）
+  app/runtime/          launcher（入口跳转器）、relay（多网卡 TCP 中继）、stub（骨架包占位服务）、node、app（dsh 本体）
   wizard/               安装 / 设置 / 卸载向导（JSON）
   build.sh              在 NAS 上打包：bash build.sh（骨架）/ bash build.sh full（捆绑 dsh）
   selftest.sh           打包前自测：伪造 TRIM_* 环境跑完整生命周期 + 跳转器 HTTP 行为

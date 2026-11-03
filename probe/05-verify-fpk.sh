@@ -123,9 +123,20 @@ try{const b=fs.readFileSync(process.argv[1]);
           "$TARGET/runtime/app/node_modules/@deepseek-ai/dsh/package.json" 2>/dev/null)"
     printf '      dsh 版本：%s\n' "${DV:-?}"
     if [ -x "$TARGET/runtime/node/bin/node" ]; then
-      ok "捆绑的 node" "$("$TARGET/runtime/node/bin/node" -v 2>/dev/null)"
+      # dsh 0.2.2 起在发布包里声明 engines.node >= 24.9.0；npm 默认只告警，
+      # 所以「装得上」不等于「跑得起来」。这里按数值判一次，别只看字符串。
+      NB="$("$TARGET/runtime/node/bin/node" -v 2>/dev/null)"
+      NM="${NB#v}"; NM="${NM%%.*}"
+      NN="${NB#v*.}"; NN="${NN%%.*}"
+      case "$NM" in ''|*[!0-9]*) NM=0 ;; esac
+      case "$NN" in ''|*[!0-9]*) NN=0 ;; esac
+      if [ "$NM" -gt 24 ] || { [ "$NM" -eq 24 ] && [ "$NN" -ge 9 ]; }; then
+        ok "捆绑的 node" "$NB（满足 dsh 的 >=24.9.0）"
+      else
+        bad "捆绑的 node 版本过低" "$NB < 24.9.0，dsh 会在运行期才报错"
+      fi
     else
-      warn "没有捆绑 node" "会回退到 /var/apps/nodejs_v24（需 >= 24.9）"
+      warn "没有捆绑 node" "会回退到 /var/apps/nodejs_v24（需 >= 24.9，用 build.sh 打 full 包可自带）"
     fi
     # F28：dsh 装插件时 spawn 的是裸命令 "pnpm"（只认 PATH），包里没有它，
     # Web 界面「添加插件」就一律报 spawn pnpm ENOENT，与包名无关。
@@ -140,6 +151,21 @@ try{const b=fs.readFileSync(process.argv[1]);
       ok "插件用 npm（pnpm 转发目标）" "$("$TARGET/runtime/node/bin/npm" --version 2>&1 | head -n1)"
     else
       bad "缺少 npm" "pnpm 的 view/add 会落到系统 npm 10.9.3，与 node 24 不兼容（0.7.0 起应自带 runtime/node/bin/npm）"
+    fi
+    # 0.8.1：把 dsh 自带的 Office 渲染引擎用起来（web 形态默认不挂 skill-office）。
+    # 判据是"三件套齐全"——资产目录、Kit CLI、自带 node 少一个 cmd/main 就会跳过。
+    OA="$TARGET/runtime/app/node_modules/@deepseek-ai/dsh-skill-office/assets"
+    OKIT="$TARGET/runtime/app/node_modules/@deepseek-ai/libreoffice-kit/lib/cli.js"
+    if [ -d "$OA" ]; then
+      NASSET="$(find "$OA" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
+      ok "Office 技能资产" "$NASSET 个技能目录"
+    else
+      warn "没有 Office 技能资产" "skill-office 未随包安装，cmd/main 会跳过 --patch（不影响启动）"
+    fi
+    if [ -f "$OKIT" ]; then
+      ok "Office 渲染 Kit" "libreoffice-kit 已安装（Linux 走 wasm）"
+    else
+      warn "没有 Office 渲染 Kit" "渲染/重算/导出 PDF 不可用（作者类技能不受影响）"
     fi
   elif [ -f "$TARGET/runtime/stub/server.mjs" ]; then
     warn "骨架包（stub）" "未捆绑 dsh，只验证安装链路"
@@ -322,6 +348,18 @@ else
        "要么这次启动发生在 0.6.7 之前，要么 log_accessible_paths 没被调用；重启一次再看"
 fi
 
+# Office 技能到底有没有挂上：cmd/main 每次启动都会写一行 office: enabled / skip（带原因）。
+# 只看包里有资产不够——补丁没传进去，用户依然看不到技能。
+if [ -f "$ROOT/var/info.log" ] && grep -q 'office: ' "$ROOT/var/info.log" 2>/dev/null; then
+  OFFLINE="$(grep 'office: ' "$ROOT/var/info.log" | tail -n1)"
+  case "$OFFLINE" in
+    *enabled*) ok "Office 技能已挂载" "$OFFLINE" ;;
+    *)         warn "Office 技能未挂载" "$OFFLINE（不影响启动，只是没有渲染/预览能力）" ;;
+  esac
+else
+  warn "日志里没有 office: 这一行" "可能是升级后没重启过，或包版本早于 0.8.1"
+fi
+
 # 授权目录的浏览入口（F24）：dsh 的「选择工作区目录」只从 $HOME 起步，且把 home
 # 以下压缩成「主目录」一个面包屑 —— 用户进了这个框根本走不到「我的文件」。
 # 0.6.8 起启动时会把每个授权目录软链进 $HOME/可访问目录/，让它出现在首屏。
@@ -410,7 +448,12 @@ if [ -n "$SS_LINE" ]; then
   printf '%s\n' "$SS_LINE"
   BINDIP="$(printf '%s' "$SS_LINE" | awk '{print $4}' | sed 's/:[0-9]*$//')"
   case "$BINDIP" in
-    0.0.0.0|\*|"[::]") BINDIP=127.0.0.1 ;;
+    0.0.0.0|\*|"[::]")
+      # 0.8.0 起：有两个以上本机地址时，跳转器会改成通配监听，好让每张网卡都进得来。
+      # 这里记一笔再归一，后面的可达性检查仍按回环做。
+      ok "跳转器监听通配地址（$BINDIP）" "多网卡入口已启用（其余地址由 relay 接住）"
+      BINDIP=127.0.0.1
+      ;;
   esac
   ok "端口 $RPORT 已监听" "绑定地址 $BINDIP"
   if [ "$HAS_DSH" = "yes" ] && [ -n "${LPID:-}" ] && [ "$SSPID" != "$LPID" ]; then
@@ -469,13 +512,57 @@ if [ -n "$BINDIP" ]; then
     esac
   fi
 
-  LANIP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1);exit}}')"
-  if [ -n "$LANIP" ] && [ "$LANIP" != "$BINDIP" ]; then
-    LCODE="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$LANIP:$RPORT/" 2>/dev/null)"
-    if [ "$LCODE" = "000" ]; then
-      warn "从默认路由地址 $LANIP 连不上" "服务绑在 $BINDIP；从 $LANIP 访问飞牛桌面时点图标会打不开（改绑地址即可）"
-    else
-      ok "从默认路由地址 $LANIP 可达（HTTP $LCODE）"
+  # ---- 多网卡（0.8.0）----
+  # 旧版本这里只能告警「从默认路由地址连不上」；现在每个 scope global 的 IPv4
+  # 都应当可达：dsh 绑一个，其余由 relay 接住、并登记进 --trusted-host。
+  if [ "$HAS_DSH" = "yes" ]; then
+    # 跳过 dsh 真正绑定的那个地址（不能用 BINDIP：launcher 绑了通配时它已被归一成回环）
+    DSHBIND="$(ss -ltnp 2>/dev/null | grep -E ":$DPORT[[:space:]]" | head -n1 | awk '{print $4}' | sed 's/:[0-9]*$//')"
+    [ -n "${DSHBIND:-}" ] || DSHBIND="$BINDIP"
+    NIPS=0
+    for IP in $(ip -4 -o addr show scope global 2>/dev/null \
+                  | awk '{
+                      iface = $2
+                      for (i = 3; i <= NF; i++) if ($i == "inet") {
+                        split($(i + 1), a, "/")
+                        if (iface !~ /^(lo|docker|br-|veth|virbr|tun|tap|zt|tailscale|wg)/) print a[1]
+                      }
+                    }' | sort -u); do
+      [ "$IP" = "$DSHBIND" ] && continue
+      NIPS=$((NIPS + 1))
+      HC="$(curl -s -m 4 -o /dev/null -w '%{http_code}' "http://$IP:$RPORT/healthz" 2>/dev/null)"
+      DC="$(curl -s -m 4 -o /dev/null -w '%{http_code}' "http://$IP:$DPORT/" 2>/dev/null)"
+      case "$HC:$DC" in
+        200:401|200:200) ok "多网卡：$IP 可达" "healthz=$HC，dsh=$DC（relay + trusted-host 生效）" ;;
+        000:*|*:000) bad "多网卡：$IP 不可达" "该地址上没人监听；看 var/info.log 里的 relay: 行" ;;
+        *) warn "多网卡：$IP 响应异常" "healthz=$HC，dsh=$DC" ;;
+      esac
+    done
+    if [ "$NIPS" -eq 0 ]; then
+      ok "多网卡：本机只有 $DSHBIND 一个入口地址" "单网卡环境，无需 relay"
+    fi
+    if [ "$NIPS" -gt 0 ]; then
+      RPID="$(cut -d' ' -f1 "$ROOT/var/relay.pid" 2>/dev/null || true)"
+      if [ -n "${RPID:-}" ] && kill -0 "$RPID" 2>/dev/null; then
+        ok "relay 在跑" "pid=$RPID，接住 $NIPS 个额外地址"
+      else
+        bad "额外地址存在但 relay 没在跑" "这些地址会连不上；看 var/info.log 里 relay: 开头的行"
+      fi
+      FPID_CMD="$(tr '\0' ' ' <"/proc/${FPID:-0}/cmdline" 2>/dev/null || true)"
+      case "$FPID_CMD" in
+        *--trusted-host*) ok "dsh 收到 --trusted-host" "Host/Origin 栅栏会放行这些地址" ;;
+        *) bad "dsh 没有 --trusted-host" "relay 能连上，但 dsh 会以 403 拒绝这些地址的 /api" ;;
+      esac
+    fi
+  else
+    LANIP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1);exit}}')"
+    if [ -n "$LANIP" ] && [ "$LANIP" != "$BINDIP" ]; then
+      LCODE="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$LANIP:$RPORT/" 2>/dev/null)"
+      if [ "$LCODE" = "000" ]; then
+        warn "从默认路由地址 $LANIP 连不上" "骨架模式没有多网卡中继（stub 只绑一个地址）"
+      else
+        ok "从默认路由地址 $LANIP 可达（HTTP $LCODE）"
+      fi
     fi
   fi
 fi

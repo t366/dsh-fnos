@@ -521,10 +521,30 @@ if [ "$LINUX" = "yes" ]; then
   DBIND=127.0.0.1
   DPORT=$((PORT + 1))
 
+  # 用 127.0.0.2 冒充「第二张网卡」：dsh 绑 .1，relay 把 .2 接住。
+  # 真机上这两个会是 .109（无线）与 .114（OVS），逻辑一样。
+  export DSH_EXTRA_IPS="127.0.0.2"
+
   lc "$HERE/cmd/main" start
   check "dsh 模式 start 退出码" "0" "$?"
   check "dsh 模式被识别" "yes" \
     "$(grep -q 'start: mode=dsh' "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
+
+  # ---- 多网卡编排：relay 起来了吗、dsh 认不认那个地址 ----
+  check "多网卡：启动日志记录了第二个地址" "yes" \
+    "$(grep -q 'relay=127\.0\.0\.2' "$ROOT/var/info.log" 2>/dev/null && echo yes || echo no)"
+  check "多网卡：relay 进程存活" "yes" \
+    "$(p="$(cut -d' ' -f1 "$ROOT/var/relay.pid" 2>/dev/null)"; [ -n "$p" ] && kill -0 "$p" 2>/dev/null && echo yes || echo no)"
+  check "多网卡：relay 在该地址上可访问（200）" "200" \
+    "$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.2:$DPORT/" 2>/dev/null)"
+  # 这两条读 /proc，必须有 Linux 语义
+  check "多网卡：dsh 收到 --trusted-host" "yes" \
+    "$(p="$(cut -d' ' -f1 "$ROOT/var/dsh.pid" 2>/dev/null)"; \
+       tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -q -- "--trusted-host 127.0.0.2:$DPORT" && echo yes || echo no)"
+  check "多网卡：跳转器监听通配地址并带白名单" "yes" \
+    "$(p="$(cut -d' ' -f1 "$ROOT/var/launcher.pid" 2>/dev/null)"; \
+       c="$(tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null)"; \
+       case "$c" in *"--host 0.0.0.0"*"--allow 127.0.0.1,127.0.0.2"*) echo yes ;; *) echo no ;; esac)"
 
   LPIDF="$ROOT/var/launcher.pid"
   check "跳转器 pidfile 已写" "yes" "$([ -s "$LPIDF" ] && echo yes || echo no)"
@@ -556,6 +576,8 @@ if [ "$LINUX" = "yes" ]; then
   lc "$HERE/cmd/main" stop >/dev/null 2>&1
   check "stop 后跳转器已退出" "yes" \
     "$(p="$(cut -d' ' -f1 "$LPIDF" 2>/dev/null)"; if [ -z "$p" ] || ! kill -0 "$p" 2>/dev/null; then echo yes; else echo no; fi)"
+  check "stop 后 relay 已退出" "yes" \
+    "$(p="$(cut -d' ' -f1 "$ROOT/var/relay.pid" 2>/dev/null)"; if [ -z "$p" ] || ! kill -0 "$p" 2>/dev/null; then echo yes; else echo no; fi)"
   check "stop 后 state 已删" "yes" \
     "$([ -f "$ROOT/var/launcher.json" ] && echo no || echo yes)"
 
@@ -566,9 +588,10 @@ if [ "$LINUX" = "yes" ]; then
     "$(grep -q 'faketoken_1234567890' "$ROOT/var/dsh-url.txt" 2>/dev/null && echo yes || echo no)"
   lc "$HERE/cmd/main" stop >/dev/null 2>&1
 else
-  SKIP=$((SKIP + 13))
+  SKIP=$((SKIP + 19))
   printf '  \033[33mSKIP\033[0m  dsh 模式进程编排（Windows 上 stop 杀不掉原生进程，会串到下一段）\n'
 fi
+unset DSH_EXTRA_IPS
 rm -rf "$ROOT/target/runtime/app"
 
 step "入口跳转器（自动进入 + 配对，跨平台）"
@@ -576,9 +599,9 @@ step "入口跳转器（自动进入 + 配对，跨平台）"
 # 之所以要单独测：入口是用户唯一的进门动作，错了就是「装好了但进不去」，
 # 而且这类错在真机上只能靠人去点，代价很高。
 NODE_FOR_TEST="${DSH_TEST_NODE:-$(command -v node 2>/dev/null || true)}"
-if [ -z "${NODE_FOR_TEST:-}" ]; then
-  SKIP=$((SKIP + 11))
-  printf '  \033[33mSKIP\033[0m  入口跳转器（没有 node 可用于起测试进程）\n'
+  if [ -z "${NODE_FOR_TEST:-}" ]; then
+    SKIP=$((SKIP + 16))
+    printf '  \033[33mSKIP\033[0m  入口跳转器（没有 node 可用于起测试进程）\n'
 else
   G="$ROOT/gate"
   mkdir -p "$G"
@@ -597,9 +620,14 @@ else
   for i in 1 2 3 4 5 6 7 8; do
     free_port $((13300 + i)) && { UP=$((13300 + i)); break; }
   done
+  # 多网卡中继的监听端口（只在 127.0.0.2 上，与 GP/UP 都不冲突）
+  RP=""
+  for i in 1 2 3 4 5 6 7 8; do
+    free_port $((13420 + i)) && { RP=$((13420 + i)); break; }
+  done
 
   if [ -z "$GP" ] || [ -z "$UP" ]; then
-    SKIP=$((SKIP + 8))
+    SKIP=$((SKIP + 13))
     printf '  \033[33mSKIP\033[0m  入口跳转器（找不到空闲端口）\n'
   else
     TOK="TESTTOKEN123456"
@@ -647,14 +675,19 @@ JS
       printf '  \033[33mWARN\033[0m  假上游 20s 内没就绪（看 %s）\n' "$G/up.log"
     fi
 
-    start_gate() { # $1=auth  $2=host（默认回环；给非回环地址时才有回环备份监听）
-      local h="${2:-127.0.0.1}"
+    start_gate() { # $1=auth  $2=host（默认回环；给非回环地址时才有回环备份监听） 其余=额外参数
+      local auth="$1" h="127.0.0.1" probe
+      shift
+      if [ "$#" -gt 0 ]; then h="$1"; shift; fi
       "$NODE_FOR_TEST" "$HERE/app/runtime/launcher/server.mjs" \
-        --host "$h" --port "$GP" --state "$G/launcher.json" --auth "$1" >"$G/gate.log" 2>&1 &
+        --host "$h" --port "$GP" --state "$G/launcher.json" --auth "$auth" "$@" >"$G/gate.log" 2>&1 &
       G_PID=$!
+      # 0.0.0.0 在部分平台上不能直接连，探测固定走回环（它覆盖回环）
+      probe="$h"
+      [ "$probe" = "0.0.0.0" ] && probe="127.0.0.1"
       i=0
       while [ "$i" -lt 40 ]; do
-        if curl -s -m 1 -o /dev/null "http://$h:$GP/healthz" 2>/dev/null; then return 0; fi
+        if curl -s -m 1 -o /dev/null "http://$probe:$GP/healthz" 2>/dev/null; then return 0; fi
         sleep 0.25
         i=$((i + 1))
       done
@@ -683,9 +716,9 @@ JS
 
     if ! start_gate auto; then
       check "跳转器可启动（auto）" "yes" "no（看 $G/gate.log）"
-      # 起不来时把整段（auto 7 + 无令牌 1 + 双绑 2 + pair 8）都记成跳过，
-      # 别让「0 失败」看起来像验过。数量变了就跟着改。
-      SKIP=$((SKIP + 18))
+      # 起不来时把整段（auto 7 + 无令牌 1 + 双绑 2 + 多网卡 3 + 中继 2 + pair 8）
+      # 都记成跳过，别让「0 失败」看起来像验过。数量变了就跟着改。
+      SKIP=$((SKIP + 23))
     else
       # ---- auto：点图标直接进（这是用户唯一想做的事）----
       H="$(hdr "http://127.0.0.1:$GP/")"
@@ -755,6 +788,52 @@ JS
         check "双绑：给 LAN 地址时回环也监听" "yes" "no（launcher 没起来，看 $G/gate.log）"
       fi
       stop_gate
+
+      # ---- 多网卡：302 的目标要跟着「请求从哪个地址进来」走 ----
+      # dsh 只能绑一个地址（HARNESS-ARCHITECTURE §5.1），其余地址靠 relay 接住；
+      # 但跳转器若固定用 state.host，从另一张网卡进来的人会被送到他连不上的地址。
+      # 白名单之外的 Host 必须回退 —— 否则 DNS rebinding 能把 ?token= 送到攻击者域名。
+      mkstate "$TOK"
+      if start_gate auto 0.0.0.0 --allow "127.0.0.1,127.0.0.2"; then
+        M1="$(hloc "$(hdr -H "Host: 127.0.0.2:$GP" "http://127.0.0.1:$GP/")")"
+        check "多网卡：从白名单地址进来，302 回同一个地址" "yes" \
+          "$(printf '%s' "$M1" | grep -q "http://127.0.0.2:$UP/" && echo yes || echo no)"
+        M2="$(hloc "$(hdr -H "Host: evil.example:$GP" "http://127.0.0.1:$GP/")")"
+        check "多网卡：非白名单 Host 回退到绑定地址（不泄露令牌）" "yes" \
+          "$(printf '%s' "$M2" | grep -q "http://127.0.0.1:$UP/" && echo yes || echo no)"
+        check "多网卡：/healthz 列出允许的地址" "yes" \
+          "$(curl -s -m 3 "http://127.0.0.1:$GP/healthz" 2>/dev/null \
+             | grep -q '"allow":\["127.0.0.1","127.0.0.2"\]' && echo yes || echo no)"
+      else
+        check "多网卡：从白名单地址进来，302 回同一个地址" "yes" "no（launcher 没起来，看 $G/gate.log）"
+        check "多网卡：非白名单 Host 回退到绑定地址（不泄露令牌）" "yes" "no"
+        check "多网卡：/healthz 列出允许的地址" "yes" "no"
+      fi
+      stop_gate
+
+      # ---- TCP 中继：非绑定地址上的 dsh 端口必须能接住并原样转发 ----
+      # 中继是「多网卡可用」的另一半：跳转器把人送到 <另一地址>:<内部端口>，
+      # 那个端口上必须真的有人在听。这条用假 dsh 当上游，验证字节流没被动过。
+      mkstate "$TOK"
+      if [ -z "$RP" ]; then
+        check "中继：非绑定地址可访问" "yes" "no（没有空闲端口）"
+      else
+        "$NODE_FOR_TEST" "$HERE/app/runtime/relay/server.mjs" \
+          --listen "127.0.0.2:$RP" --target "127.0.0.1:$UP" >"$G/relay.log" 2>&1 &
+        R_PID=$!
+        i=0
+        while [ "$i" -lt 40 ]; do
+          curl -s -m 1 -o /dev/null "http://127.0.0.2:$RP/?token=$TOK" 2>/dev/null && break
+          sleep 0.25
+          i=$((i + 1))
+        done
+        RCODE="$(curl -sS -m 5 -o /dev/null -w '%{http_code}' \
+                 "http://127.0.0.2:$RP/?token=$TOK" 2>/dev/null)"
+        check "中继：非绑定地址可访问（上游 303）" "303" "${RCODE:-无}"
+        check "中继：日志记录了转发目标" "yes" \
+          "$(grep -q "127.0.0.2:$RP -> 127.0.0.1:$UP" "$G/relay.log" 2>/dev/null && echo yes || echo no)"
+        kill "$R_PID" 2>/dev/null
+      fi
 
       # ---- pair：老行为，留给不想让内网直接进的用户 ----
       mkstate "$TOK"

@@ -1,0 +1,23 @@
+# 让 Web 形态也带上 Office 技能（渲染预览 / 公式重算 / 导出 PDF）。
+#
+# 为什么需要这个文件：dsh 的 web 模板只有 base + web-app 两个 bundle，
+# `@deepseek-ai/dsh-skill-office` 只被 sdk-app 形态挂载（见上游
+# packages/bundle/sdk-app/cordis.patch.yml）。但它的渲染引擎
+# `@deepseek-ai/libreoffice-kit` 是 skill-office 的**硬依赖**，会随 dsh 一起装进
+# node_modules（Linux 上走 wasm 预编译包，约 152MB）。也就是说：这 152MB 已经
+# 在包里了，只是没人挂载、白躺着。挂上就等于把它们用起来，不增加下载量。
+#
+# 三个路径由 cmd/main 在启动前算好并 export，只有三者都真实存在时才会把
+# `--patch <本文件>` 传给 dsh（见 cmd/main 的 office_patch）。任一缺失就完全不传，
+# 行为与旧版一致：配置不合法会让插件注册失败，进而拖垮整个启动，这个代价不值得冒。
+- insert:
+    - id: skill-office
+      name: '@deepseek-ai/dsh-skill-office'
+      config:
+        # 七个技能目录（office、office-docx、…、office-xlsx）的父目录
+        assetRoot: !!js "process.env.DSH_OFFICE_ASSETS"
+        # LibreOffice Kit 的 CLI 入口（node <cli>）
+        cli: !!js "process.env.DSH_OFFICE_CLI"
+        # 操作类技能跑 Kit 用的 node：必须是我们自带的那个，
+        # 不能用系统的（飞牛上 /usr/bin/node 可能不存在或版本过低）
+        node: !!js "process.env.DSH_OFFICE_NODE"

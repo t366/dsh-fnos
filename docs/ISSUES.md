@@ -57,28 +57,32 @@
 | F33 | 启动日志明文写入完整登录令牌（`"token":"…"` 未打码），而 info.log 正是外发排障的那份 | 缺陷（安全） | ✅ | 0.7.2：`start: state=` 两条正则都打码；2026-11-01 18:33 之后的行实测 **0 命中**；`dsh web:` 那行控制不了，改由 RUNBOOK 强制脱敏 |
 | F34 | 手工启动算出第二个 var 目录 → 两套 pidfile → 3080 被占 2h20m | 缺陷（路径） | ✅ | 0.7.2：`PKGVAR` 缺省值按 `@appcenter → @appdata` 归一 |
 | F36 | `build.sh` 的 `chmod +x cmd/*` 会把 `cmd/lib-home`、`cmd/*.mjs` 加成 755，仓库记的是 644 → 打过包的机器 `git pull` 被「本地改动会被覆盖」挡住 | 缺陷（构建） | ✅ | 0.7.3：`chmod +x cmd/*` 之后对这两类显式 `chmod a-x`；详见 DEVLOG 31.5 |
+| F37 | Web 形态没有 Office 技能：`skill-office` 只在 sdk 形态挂载，而它的渲染引擎（wasm，约 152MB）早就随 dsh 装进了包，白躺着 | 缺陷（形态选择） | ⚠️ 0.8.1 待真机 | `cmd/main` 用 `--patch` 挂 `skill-office`，三路径缺一即降级；见「F37」 |
 | T1 | 0.5.0 打包与真机安装 | — | ✅ | `probe/05` 33 PASS / 1 WARN / 0 FAIL |
 | T2 | cookie 跨重启 / 令牌是否一次性 | — | ✅ | `probe/07` 10 PASS：令牌可复用、cookie 跨重启存活 |
-| T3 | 端口写死 3080，不可配置 | — | 📋 | 改端口=卸载重装 |
+| T3 | 端口写死 3080，不可配置 | — | 🚫 不做 | 见「T3 为什么不做」：端口是打包期常量 |
 | T4 | 升级不可降级，schema 兼容未验证 | — | 📋 | 见 PLAN §7.6 |
 | T5 | 解包瞬间磁盘峰值未测（耗时与占用已测） | — | ⚠️ | 下次安装时轮询 `df` |
-| T6 | 双网卡（.109 无线 / .114 OVS）绑定选择 | — | 📋 | 自动探测默认路由源地址 |
-| T7 | 未接飞牛统一网关，外网/DDNS 无解 | — | 📋 | 见下文 |
+| T6 | 双网卡（.109 无线 / .114 OVS）只有一个能进 | — | ⚠️ 0.8.0 待真机 | `relay` + `--trusted-host` + 跳转器白名单，见「T6 多网卡」 |
+| T7 | 未接飞牛统一网关，外网/DDNS 无解 | — | 📋 | **判断已修正**：dsh 支持挂载前缀，缺的只是 unix-socket 反代层 |
 | T8 | 无进程看护，dsh 崩了不会自动拉起 | — | 📋 | 见下文 |
+| T9 | 上游已发 `0.2.2-alpha.2`，本包仍钉 `0.2.1-rc.5` | — | ⏸ 暂不跟 | 见「T9 版本跟随」：仍是 alpha 线；引擎门槛已加构建期校验 |
 | T10 | 应用中心没有「停用」入口 | — | ✅ | 在「打开」右侧 ▼ 下拉里，非缺陷 |
 | T11 | UI 手动安装更高版本时，是覆盖升级还是静默跳过 | — | ✅ | 0.6.0 实测覆盖成功，见下文 |
+| T12 | 只出 `x86` 包，ARM 机型装不上 | — | ⚠️ 门禁已加 | 构建期校验架构，见「T12 双架构」 |
+| T13 | dsh 的「安全上下文」API 在局域网 HTTP 下是否可用 | — | ✅ 已核 | 上游 0.2.x 已用 `getRandomValues` 替代，见 [REFERENCE-PROJECTS §3.3](REFERENCE-PROJECTS.md) |
 
 ---
 
 ## 剩余问题总览
 
-> 截至 2026-11-01 19:18，真机 **`0.7.3`**。这里只列**还没关掉的**，按「下一步要不要动手」分四档：
+> 截至 2026-11-02，真机仍为 **`0.7.3`**；**`0.8.0` 的多网卡入口已写完、本地自测通过，尚未装机**。
+> 这里只列**还没关掉的**，按「下一步要不要动手」分四档：
 > **A 档**一条命令能关、**B 档**要改代码（已定方案待排期）、**C 档**证据已在手可直接结案、
 > **D 档**明知有风险但决定先不动。已修缺陷见第二节，平台限制见第一节，历史验收见第三节。
 >
-> **最近关闭**：F31（升级快照真会打了，486M）、F32（凭据判据不再误报）——DEVLOG 阶段 30；
-> **F33**（0.7.2 之后的行令牌 0 命中，2026-11-01 18:37 实测）；
-> **F35 + F30 的代码部分**（快照落点与迁移、store 自愈，2026-11-01 19:18 装机实测）。
+> **最近动作**：T6（多网卡）代码完成待真机；T3 结案为「不做」（端口是打包期常量）；
+> T7 判断修正（dsh 支持挂载前缀，缺的是 unix-socket 反代层）。
 
 ### 0.7.3 装机验收（2026-11-01 19:18）
 
@@ -114,7 +118,7 @@ $ ls -lh /vol1/@appshare/dsh/backups/
 
 | 项 | 工作量 | 不做的后果 |
 |---|---|---|
-| **T6 双网卡** | 中：launcher 绑通配 + 302 到单 IP；dsh 本体拒绝 `0.0.0.0` | 无线网段 `.109` 打不开；换 IP 后静默失效到重启 |
+| ~~**T6 双网卡**~~ | **0.8.0 已实现**：`relay` + `--trusted-host` + 跳转器白名单 | 待真机验收，见「T6 多网卡」 |
 | **瘦身** 977MB（fpk 199MB）→ 约 120MB | 中：`install_dep_apps: nodejs_v24` + 去 bundled node | 安装慢、占用翻倍 |
 | **插件能力** | 中：`bin/dsh` 包装 + 官方 plugin market bundle | 「一切皆插件」用不起来，只能一个个手装 |
 | **T8 进程看护** | 中：先理清与应用中心 stop 的竞争 | dsh 崩了不会自愈 |
@@ -122,9 +126,11 @@ $ ls -lh /vol1/@appshare/dsh/backups/
 | **T7 统一网关** | 大：`microApp` + `app.sock` 反代 + `auto` 判据重写 | 外网 / DDNS / FN Connect 无解；但做了能一次带走 T6 |
 | **ARM 包** | 中：交叉构建 + 真机验证 | 覆盖不到 ARM 机型 |
 
-**排序上的一个判断**：如果确定要做 T7，F17 的回环双绑只是过渡措施——统一网关下 launcher
-本来就该只监听 `127.0.0.1`，那时「平台探测不到」和「双网卡绑错」会一起消失。所以 T7 要么
-尽早做，要么明确不做；不要先为 T6 写一套网卡探测，再被 T7 推翻。
+**排序上的一个判断（2026-11-02 更新）**：T6 已经做了，而且**不会**被 T7 推翻——
+两者是不同层：T6 解决"局域网内从哪张网卡进来都能用"，T7 解决"从飞牛域名/外网进来"。
+T7 落地后，launcher 应改成只监听 `127.0.0.1`（由网关转发），那时 relay 可以整段关掉
+（一个开关的事），不需要重写网卡探测。所以现在的顺序是：T6 已上线并观察真机，
+T7 先把 unix-socket 反代层做出来，再决定入口是否切到网关。
 
 ### C 档　证据已在手，更新台账即可结案
 
@@ -1493,6 +1499,48 @@ $ ls -lh /vol1/@appshare/dsh/backups/
 由 P6 的既有实测（卸载只把权限改成 000、内容保留）支撑，`install_callback` 已有 000 自愈。
 下次真要走卸载重装时顺手 `ls` 一次即可，不作阻塞项。
 
+---
+
+### F37 Web 形态没有 Office 技能，而它的渲染引擎一直在包里 ⚠️（0.8.1 已实现，待真机验收）
+
+**发现方式**：顺着「功能在飞牛上能不能用」查形态时发现的——`skill-office` 只出现在
+`packages/bundle/sdk-app/cordis.patch.yml`，`base` 和 `web-app` 里都没有；而
+`@deepseek-ai/libreoffice-kit` 是 skill-office 的**硬依赖**，会随 `@deepseek-ai/dsh`
+一起装进 `node_modules`。Linux 没有原生包，走 `libreoffice-kit-wasm`，解包约 **152MB**。
+
+也就是说：**这 152MB 从 0.7.x 起就一直在我们包里，却没有任何一行配置会挂载它。**
+用户既看不到 Office 技能，也享受不到这份体积换来的能力。
+
+**改法**：启动时用 `--patch` 覆盖层插一行 `skill-office`（web 形态原本只叠 base + web-app）。
+三个路径必须先验存在：
+
+| 路径 | 缺了会怎样 |
+|---|---|
+| `runtime/app/node_modules/@deepseek-ai/dsh-skill-office/assets` | 技能资产不全，注册期会抛 |
+| `…/@deepseek-ai/libreoffice-kit/lib/cli.js` | 操作类技能没有可执行入口 |
+| `runtime/node/bin/node` | Kit 要用自带的 node 跑，系统 node 可能不存在 |
+
+**为什么坚持"缺一就不传 `--patch`"**：`skill-office` 在 `assetRoot`/`cli` 不合法时是
+**throw**（`src/index.ts:50-71`），失败的 fiber 会拖垮整个启动。少挂一次只是"没有 Office"，
+挂错一次是"应用打不开"——两者代价差一个量级。
+
+**验证判据（真机）**：
+
+1. `probe/05` 出现 `PASS Office 技能资产 / Office 渲染 Kit / Office 技能已挂载`；
+2. `grep 'office: ' var/info.log` 最后一行是 `enabled` 且三个路径都在 `@appcenter/dsh/target` 下；
+3. 界面里让模型「把这个 xlsx 导出成 PDF」能拿到文件（唯一能证明 wasm 真跑起来的判据）；
+4. **中文不能缺字**：导出一份含中文的 docx，用 PDF 阅读器看是不是方块。
+
+> 第 4 条不是多余的：Kit 在 Linux 上走 WASM，而 WASM **只用导入的字体，找不到可用字体
+> 时以 `unavailable` 拒绝**。飞牛是最小化 Debian，很可能只有西文字体——那样 PDF 能出、
+> 中文缺字。`probe/01` 已加一行报告 `/usr/share/fonts` 里有没有 CJK；真缺就考虑往
+> `$DSH_HOME/.fonts` 放一份 Noto Sans CJK SC（约 16MB）。详见
+> [HARNESS-FEATURES §3.3](HARNESS-FEATURES.md)。
+
+**没做的**：作者类技能（生成 docx/xlsx/pptx）仍要宿主 Python 库，web 形态没有
+`workspace-dependencies` 工具可以借。`probe/01` 已加报告行，先看真机有没有库再决定
+要不要在包里带 Python payload（+60–100MB）。见 [HARNESS-FEATURES §3.1](HARNESS-FEATURES.md)。
+
 
 ---
 
@@ -1546,10 +1594,18 @@ healthz    {"ok":true,"ready":true,"auto":true,"mode":"auto"}
 脚本里「第二次点击」用的是**独立、不带 `-b $JAR`** 的 curl，所以 303 不是靠 cookie 蒙过去的，
 是真的同一个令牌被接受了第二次。这条区分很重要——若带了 jar，测出来就是假阳性。
 
-### T3 端口写死 3080 📋
+### T3 端口写死 3080 🚫 不做（结论，不是待办）
 
-`manifest.service_port`、`app/ui/config`、向导默认值、跳转器参数四处都写死 3080。
-改端口目前等于卸载重装。要做成可配，得同时改这四处并在 `install_callback` 里落盘。
+`manifest.service_port` 是**打包期常量**，被平台用于两件事：`checkport` 探测、桌面入口 URL；
+`app/ui/config` 里还有一处静态地址。三处必须一致，而前两处只有重打包才能改。
+
+运行期把 `DSH_PORT` 或 launcher 挪到别的端口，平台仍按 3080 探测 → 卡片显示「未运行」、
+点图标也打不开。所以「端口可配」不是没做，而是**运行期本来就不该可配**；
+撞 3080 只能改 `manifest` 重新打包（或者卸载重装到另一台机器上）。
+
+记录这一条的价值在于：它是一个**看起来该做、实际会制造新故障**的需求，
+以后不要再排期。要做也只在构建参数层面做（`build.sh` 生成 manifest 时替换），
+不放进应用设置。
 
 ### T4 升级不可降级 📋
 
@@ -1582,12 +1638,9 @@ du -sh /vol1/@appcenter/dsh                       # 真实占用
 find /vol1/@appcenter/dsh -type f | wc -l         # 文件数
 ```
 
-### T6 双网卡绑定选择 📋
+### T6 双网卡：只有一个地址能进 ⚠️ 0.8.0 已实现，待真机验收
 
-这台 NAS 有 `192.168.0.109`（无线）与 `192.168.0.114`（OVS）。桌面入口用的是**你访问飞牛
-时浏览器里的 host**，而 dsh 只能绑一个地址——绑错就点不开。当前策略是自动探测默认路由源地址。
-
-**2026-10-28 实测：这不是潜在风险，是现存的可用性缺口。**
+**现象（2026-10-28 实测）**：这台 NAS 有 `192.168.0.109`（无线）与 `192.168.0.114`（OVS）。
 
 ```
 ps  → launcher ... --host 192.168.0.114 --port 3080
@@ -1595,10 +1648,44 @@ ss  → LISTEN 127.0.0.1:3080        (回环，F17 补的)
       LISTEN 192.168.0.114:3080    (探测到的默认路由源地址)
 ```
 
-`.109` 上**没有任何监听**，从无线网段访问 `http://192.168.0.109:3080` 必然连不上。
-另外 `--host` 是安装/启动时探到的**固定值**，NAS 换 IP（DHCP 续租变化、切网段）后会静默失效，
-直到重启应用。修法二选一：绑 `0.0.0.0`（F9 的配对页已经兜住安全问题），或遍历本机所有
-IPv4 逐个监听（与 F17 的回环双绑同一套写法）。
+`.109` 上没有任何监听，从无线网段访问必然连不上；换 IP（DHCP 续租、切网段）后
+还会静默失效到重启应用。
+
+**为什么不能简单「都绑 0.0.0.0」**：dsh 的 web 载体在 load 阶段拒绝通配地址
+（`Config.host` 契约，HARNESS-ARCHITECTURE §5.1）。跳转器自己可以绑通配，dsh 不行。
+
+**为什么不能用 HTTP 反代补齐**：cookie 绑定 `hostname:port`，Host/Origin 栅栏在认证之前；
+代理改 Host → cookie audience 对不上 → 302 落地即 401。WS（`/api/remote.mux`）还要透传 Upgrade。
+
+**0.8.0 的解法（三个组件，缺一不可）**
+
+| 组件 | 作用 |
+|---|---|
+| `app/runtime/relay/server.mjs`（新增） | 在**其余本机 IPv4** 上监听 dsh 内部端口，TCP 层原样转发到绑定地址。不解析 HTTP，Host/cookie/Upgrade 全部不变 |
+| `cmd/main` | 枚举本机 IPv4（排除 lo/docker/br-/veth 等，**保留 `*-ovs`**）；给 dsh 加 `--trusted-host <ip>:<port>`；起 relay；把地址列表传给跳转器 |
+| `app/runtime/launcher/server.mjs` | `--host 0.0.0.0` + `--allow <本机地址>`；302 目标按「请求从哪个地址进来」选，且只认白名单（防 DNS rebinding 把 token 送到外部域名） |
+
+**刻意保留的行为**
+
+- **单网卡不启用**：探测不到第二个地址时不启 relay、不加 `--trusted-host`、跳转器仍只绑一个地址，
+  与 0.7.x 完全一致（避免把 docker0 之类接口一起暴露）；
+- **relay 不参与 `status`**：它只影响一张网卡，算成异常会让应用中心反复重启整个应用；
+- relay 起不来只告警，不阻塞启动。
+
+**待真机验收的判据**
+
+```bash
+# 1. 两个地址都能进（都应 200/401，不能是 000）
+curl -s -o /dev/null -w '%{http_code}\n' http://192.168.0.114:3080/healthz
+curl -s -o /dev/null -w '%{http_code}\n' http://192.168.0.109:3080/healthz
+# 2. dsh 真的收到了栅栏放行
+tr '\0' ' ' </proc/$(cut -d' ' -f1 /var/apps/dsh/var/dsh.pid)/cmdline | grep -o -- '--trusted-host [^ ]*'
+# 3. relay 在跑，且日志有两条 listening
+cat /var/apps/dsh/var/relay.pid; grep 'relay:' /var/apps/dsh/var/info.log | tail -4
+# 4. 从 .109 的浏览器点图标：应当落到 .109:3081（不是 .114）
+```
+
+第 4 条是这次改动的核心验收：**跳转目标必须跟着访问来源走**。
 
 ### T7 未接飞牛统一网关 📋
 
@@ -1614,6 +1701,46 @@ DDNS 与 FN Connect 用不了、双网卡绑错就打不开（T6）。社区成�
 的连接，而不是像 F9 那样一律要求配对。需要先核对
 [docs/FNOS-OFFICIAL-DOCS.md](FNOS-OFFICIAL-DOCS.md) 里 `microApp` / socket 的字段规范。
 
+**2026-11-02 补充（对着两个实现读了之后）**
+
+- `YUNXI-fi/DeepSeek-Harness-fnos` 已经跑通这条路：`ui/config` 用 `iframe` +
+  `app.sock`，代理进程剥掉 `/app/deepseekharness` 前缀，并且**改写响应体里的
+  `/assets`、`/api` 绝对路径**，WebSocket 直接透传。能work，但“改写响应体”是
+  上游换资源路径就会坏的耦合。
+- 更好的做法是用上游的 `--public-url <带前缀的 URL>`（§5.4 有 e2e）：资源路径与
+  302 都按前缀生成，代理只做“收 socket、剥前缀、转 TCP”，**不碰 HTML/JS**。
+  这是本项目 T7 的实现路线。
+- `techysy` 的 `trusted_hosts.conf` 值得抄思路：把 `fnos.net` / `5ddd.com`
+  与用户自定义域名写进 `--trusted-host`，否则网关转发过来的 Host 过不了栅栏。
+  但它的落点是 `$DSH_HOME/trusted_hosts.conf`，我们要放 `PKGVAR`，别混进用户数据。
+
+## T12 只出 `x86` 包，ARM 机型装不上 ⚠️
+
+`manifest` 写死 `platform="x86"`，而 `build.sh` 的 node 来自 `NODE_SRC`、依赖用
+**本机 npm** 装 —— 产物天然绑定打包机的架构。社区项目都出 x86 / ARM 两套
+（`techysy` 还注明 ARM 原生模块要求 glibc ≥ 2.28，且作者未在 ARM 实机自动化测试）。
+
+**已做（0.8.1）**：`build.sh` 在版本检查后按 `uname -m` 校验
+`manifest.platform`，不一致直接 `die`；`platform="all"` 也拒绝（fnOS 规范：
+含架构二进制时不能用 `all`）。这挡住的是「在 x86 上打出 arm 包」这种静默错误。
+
+**没做**：真正的 ARM 出包。需要在 ARM 机器上跑一次 `bash build.sh`（node 与
+node_modules 都就地取），并单独验收 `bwrap`/landlock 可用性——那是 F21 的既有结论，
+不能假设两个架构一致。
+**2026-11-02 判断修正（读上游源码后）**：以前记的是「dsh 只服务 `/`，路由要留在
+`gatewayPrefix` 下 → 接不上」。前半句不成立：
+
+- `--public-url` **可以带路径**（`https://host/apps/dsh`），前端资源与 302 都按请求目录解析；
+- 官方 e2e 用例就是「`--public-url` 带前缀 + 前置代理剥前缀」，`/<prefix>/?token=…` 换 cookie 后
+  `/<prefix>/api/...` 正常（`apps/cli/tests/profiles/web/tests/public-url.expected.e2e.ts` L244）；
+- `--trusted-host` 负责让网关的 authority 过栅栏；`public-url` 只影响公告，不参与鉴权。
+
+所以 T7 的瓶颈**只剩 fnOS 这一侧**：网关要求应用监听 `target/app.sock`，而 dsh 的
+webserver 只监听 TCP 字面量。落地路径因此变成「写一层 unix-socket↔TCP 的剥前缀反代」，
+而不是「改 dsh」。工作量从"大"降到"中"，且不影响现有 3080 入口（两条路可以并存）。
+注意反代必须保留原始 `Host`（cookie audience 绑 hostname:port），并在转发时剥掉
+`gatewayPrefix`。
+
 ### T8 无进程看护 📋
 
 fnOS 没有 systemd，进程只由应用中心轮询 `cmd/main status` 驱动。`dsh` 本体崩溃后：
@@ -1621,6 +1748,31 @@ launcher 还活着 → `status` 仍返 0，应用中心不会拉起；launcher �
 但不保证平台会自动重启。用户看到的是「点图标进不去」。可做的最小方案：launcher
 在每次请求时探测内部端口，连续失败则记录并在 `/healthz` 暴露；或由 launcher 兼作看护，
 `spawn` dsh 并在退出时重启（需先确认不会与应用中心的 stop 竞争）。
+
+---
+
+### T9 版本跟随：`0.2.2` 线已出，但仍不跟 ⏸（2026-11-02 复核）
+
+上游 master 已到 `0.2.2-alpha.2`（2026-10-30 HEAD，距我们分析的 `0.2.1-rc.3` 有 351 个提交）。
+npm 实测：`latest = next = 0.2.1-rc.5`，`alpha = 0.2.2-alpha.2` —— **0.2.2 线尚未转 rc**。
+本包继续钉 `0.2.1-rc.5`。
+
+**为什么值得单独记一条**：这次复核发现唯一会真正咬人的变化是**引擎声明**。
+`0.2.1-rc.5` 的发布包里没有 `engines` 字段，`0.2.2-alpha.2` 声明了 `node >= 24.9.0`。
+npm 对 engines 默认**只告警不失败**，所以一旦哪天跟到 0.2.2，
+"装得上" 会掩盖 "跑不起来"。已做两件事兜住：
+
+| 位置 | 改动 |
+|---|---|
+| `fpk/build.sh` | 打包期按数值判 `node -v >= 24.9.0`，低于门槛直接 `die`（不带 node 的骨架包跳过此检查） |
+| `probe/05-verify-fpk.sh` | 装机期把"捆绑的 node"从打印改成 PASS/FAIL 判定，包含回退到 `nodejs_v24` 的提示 |
+
+**跟版时要重验的三条**（其余契约见 `docs/HARNESS-ARCHITECTURE.md` §11）：
+`--dump-config` 里 `webServer` / `connection` 两行还在 → 启动日志仍是 `dsh web: <url>?token=…`
+→ 带 ≥24.9 的 node 重打包并跑 `probe/05`。
+
+**顺带否掉一个诱人的"机会"**：0.2.2 新增的 `sandbox-policy.additionalWritableRoots`
+不能解 F23/F24（那是 fnOS 授权 + 选择器导航，不是沙箱写权限），不要为它排期。
 
 ---
 
