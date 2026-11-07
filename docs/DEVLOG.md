@@ -1633,3 +1633,22 @@ T9 的「转 rc 再跟」前提满足，决策翻案（原判断见阶段 34 与
 **结论：0.2.2-rc.1 对本包的全部封装契约无破坏性变化，无需改 wrapper 代码。**
 唯一需要注意的产品面变化仍是 37.2 的安全策略默认值（文件修改前读取检查与
 外部修改防护默认关闭）。
+
+### 37.8　0.2.2-rc.1 真机功能实测（2026-11-07 20:35–20:55）
+
+| 实测项 | 方法 | 结果 |
+|---|---|---|
+| 入口链路跨重启 | probe/07（重启一次应用） | ✅ PASS 11 / FAIL 0：令牌每次重 mint、跳转器跟随刷新、书签不改可用、dsh cookie 跨重启存活 |
+| Office 公式重算 | Kit CLI `recalculate`：构造 A3==SUM(A1:A2) 缓存值故意写 0 的 xlsx | ✅ 输出 A3=3，公式保留（`preservesFormulas` 属实）；wasm 引擎 v0.1.5 无缺字体阻断 |
+| Office 渲染预览 | Kit CLI `render` xlsx→PNG | ✅ page-0001.png 生成（144dpi，A1:A3） |
+| Office 导出 PDF | Kit CLI `convert` xlsx→PDF | ✅ 真实 PDF 1.7 单页；缺 Arial 仅告警有回退 |
+| up-arrow 插件（37.7 修复后） | 抓 Web index + 合并 client bundle | ✅ `@local/uparrow-history/client.js` 已注入 conversation 客户端清单，合并端点 200/6562B |
+| 插件安装链 | 自带 wrapper：`pnpm view lodash version` | ✅ 4.18.1（npm registry 经 npmmirror 可达） |
+| 其余三个本地插件 | 启动日志 + profile node_modules | ✅ 无 skip / 无 incompatible（web-search-ddg、dsh-companion-memory、dsh-speckit-preset 链接在位） |
+
+**过程中踩掉的一个坑（自己挖的）**：20:17 曾用 root 手动 `cmd/main start`，
+留下 root 属主的进程与 5 个 root 属主文件（含 `profiles/web/cordis.patch.yml`，
+office 补丁层）。dsh 用户随后启动时 EACCES 读补丁 → 端口未就绪退出，且
+`cmd/main stop` 杀不动 root 进程（pidfile 又被失败启动覆盖）。修复：kill 残留
+pid + chown dsh:dsh 五个文件。**教训照旧：手工启动一律 `su -s /bin/bash dsh`，
+不要用 root 直接 start**（RUNBOOK 已有此规矩，这次是执行者违规）。
