@@ -106,7 +106,7 @@ pnpm 自检通过：10.34.9（app/runtime/pnpm 23M）
 npm 自检通过：11.21.1（app/runtime/npm 20M）
 端到端自检通过：pnpm view lodash version -> 4.18.1
 app/ 文件数：6.6 万左右
-产物：./dsh.fpk（约 208M，版本 0.9.0）
+产物：./dsh.fpk（约 208M，版本 0.9.1）
 ```
 
 - **`dsh 版本校验通过：0.2.2-rc.1` 必须是 rc.1**：这行是回读装进来的 `package.json` 得到的，

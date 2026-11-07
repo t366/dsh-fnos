@@ -316,6 +316,17 @@ fi
 
 # ---------------------------------------------------------------- 4. 运行时
 step "运行时（mode=$MODE）"
+if [ "$MODE" != "full" ]; then
+  # 骨架模式的陷阱（0.9.0 首次踩中）：上一轮 full 构建留下的 runtime 在盘上
+  # （目录被 .gitignore，但文件都在），fnpack 打包时不区分，会把这份**过期
+  # 运行时**原样塞进包里 —— manifest 是新版本，引擎还是旧版。守卫：要么走
+  # full 重装，要么显式确认清掉。
+  if [ -d app/runtime/app/node_modules ] || [ -d app/runtime/node/bin ]; then
+    die "骨架模式但检测到残留的 full 运行时（app/runtime/app、app/runtime/node）。
+骨架包不该带引擎：这样打出来的包会拿旧引擎冒充新版本（0.9.0 事故）。
+处理：bash build.sh full 重装引擎；或确认丢弃后 rm -rf app/runtime/app app/runtime/node 再打骨架包。"
+  fi
+fi
 if [ "$MODE" = "full" ]; then
   [ -x "$NODE_SRC/bin/node" ] || die "找不到 node：$NODE_SRC/bin/node（可用 NODE_SRC 指定）"
   NODE_VER="$("$NODE_SRC/bin/node" -v)"

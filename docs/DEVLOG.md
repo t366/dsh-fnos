@@ -1583,3 +1583,25 @@ T9 的「转 rc 再跟」前提满足，决策翻案（原判断见阶段 34 与
 3. 升级后按 ARCHITECTURE §11.3 的三件事重验：`--dump-config` 的
    `webServer/connection` 两行、`dsh web:` 日志格式、`probe/05`。
 4. 量一次 `app/` 体积与文件数（bundle 增量多少）。
+
+### 37.6　0.9.0 打包事故与修复（2026-11-07 19:47 事故 / 20:00 修复）
+
+**现象**：装机后应用中心显示 0.9.0，但 dsh UI「当前版本」仍是 0.2.1-rc.5。
+
+**根因**（SSH 上机核实）：19:47 跑的是 `bash build.sh`（骨架模式）而非
+`bash build.sh full`。骨架模式不清理 `app/runtime/`，上一轮 full 构建留下的
+旧引擎（rc.5，目录被 .gitignore 但文件在盘上）被 fnpack 原样打进 app.tgz
+（71926 个文件、206MB，骨架包本应 ~100KB）——manifest 0.9.0 + 引擎 rc.5
+一起装了上去。`/tmp/dsh-npm-install.log` 不存在证明 full 的 install 没跑过；
+构建树 `fpk/app/runtime/app/.../dsh/package.json` 仍是 rc.5 是直接证据。
+
+**修复**：
+
+| 位置 | 改动 |
+|---|---|
+| `fpk/build.sh` | 骨架模式守卫：检测到 `app/runtime/app/node_modules` 或 `app/runtime/node/bin` 直接 die，提示走 full 或显式清掉 |
+| `fpk/manifest` | version → 0.9.1（0.9.0 已装机，同版本覆盖不上去），changelog 前置事故说明 |
+
+**教训**：骨架模式从来不是「安全的小包」，是「盘上有什么就打什么」；
+第一次踩中是因为历史 full 构建的残留恰好还在。守卫以后两种正确路径：
+真骨架（先手动清）或 full。
