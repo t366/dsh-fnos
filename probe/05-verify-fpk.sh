@@ -67,16 +67,31 @@ fi
 if [ -n "${TARGET:-}" ] && [ -d "$TARGET" ]; then
   # 入口图标文件名由 ui/config 的 icon 字段决定（{0} 由系统替换成尺寸），
   # 这里按其实际声明去查，别写死 icon_64.png。
+  # 路径基准有两派：包内的 config 写 app 根相对（ui/images/...），装机后
+  # 平台会归一成 ui 相对（images/...）——0.9.1 真机实抓。两处都接受。
   ICON_REL="$(grep -o '"icon"[[:space:]]*:[[:space:]]*"[^"]*"' "$TARGET/ui/config" 2>/dev/null \
               | head -n1 | sed 's/.*"\([^"]*\)"$/\1/')"
   ICON64="${ICON_REL//\{0\}/64}"
-  for f in ui/config "${ICON64:-ui/images/icon_64.png}"; do
+  icon_path() {
+    local cand
+    for cand in "${ICON64:+$TARGET/$ICON64}" "${ICON64:+$TARGET/ui/$ICON64}" \
+                "$TARGET/ui/images/icon_64.png"; do
+      [ -n "$cand" ] && [ -f "$cand" ] && { printf '%s' "$cand"; return 0; }
+    done
+    return 1
+  }
+  for f in ui/config; do
     if [ -e "$TARGET/$f" ]; then
       ok "target/$f 存在"
     else
       bad "target/$f 缺失" "说明包内 app/ 没有原样落到 target/，cmd/main 会找不到入口"
     fi
   done
+  if IP="$(icon_path)"; then
+    ok "入口图标存在" "${IP#$TARGET/}"
+  else
+    bad "入口图标缺失（icon=$ICON64）" "ui/ 下与包根下都没有；cmd/main 会找不到入口"
+  fi
 
   # 图标像素密度：详情页实测在 ~96 物理像素处显示图标。三处图标都要够大，
   # 少一处就会出现「换了图还是糊」（0.6.1~0.6.3 连踩三次：先是没换设计，
@@ -95,7 +110,7 @@ try{const b=fs.readFileSync(process.argv[1]);
   console.log(b.readUInt32BE(16)+"x"+b.readUInt32BE(20));
 }catch(e){console.log("err")}' "$1" 2>/dev/null
   }
-  ICON_PATH="$TARGET/${ICON64:-ui/images/icon_64.png}"
+  ICON_PATH="$(icon_path || true)"
   PX="$(pxof "$ICON_PATH")"
   case "${PX:-}" in
     64x64)          warn "入口图标是 64×64" "详情页显示约 96 物理像素，会被拉伸；需要 ≥128 的源" ;;
