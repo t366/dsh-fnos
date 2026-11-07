@@ -19,7 +19,7 @@
 | 任意文件夹当工作区 | 应用设置 →「访问权限」授权目录（读写）→ dsh 里「+ 添加工作区」→ 点首屏的 **「可访问目录」** 选中（0.6.8 起；见 [ISSUES F23](docs/ISSUES.md) / [F24](docs/ISSUES.md)） |
 | 多网卡访问 | 0.8.0 起自动：主地址由 dsh 直服，其余本机 IPv4 由 `relay` 接住并加入 `--trusted-host`。手工指定用 `DSH_EXTRA_IPS=192.168.0.109,192.168.0.114`（逗号分隔，排障用） |
 | Office 文档 | 0.8.1 起 **渲染预览 / 公式重算 / 导出 PDF** 可用（dsh 自带的 LibreOffice Kit，无需系统装 LibreOffice）。**生成** docx/xlsx/pptx 需要宿主 Python 库，见 [HARNESS-FEATURES §3.1](docs/HARNESS-FEATURES.md) |
-| 运行时 | 自带 Node 24（`v24.22.1`）+ `@deepseek-ai/dsh@0.2.1-rc.5`（0.7.1 起；钉版理由与升级记录见 [PLAN §3.2](PLAN.md)） |
+| 运行时 | 自带 Node 24（`v24.22.1`）+ `@deepseek-ai/dsh@0.2.2-rc.1`（0.9.0 起；钉版理由与升级记录见 [PLAN §3.2](PLAN.md)。注意：文件修改前读取检查与外部修改防护上游默认关闭） |
 | 插件 | 0.7.0 起运行时**成套自带 pnpm 10.34.9 + npm 11.21.1**（`runtime/pnpm`、`runtime/npm`，各配 `runtime/node/bin/` 下的 wrapper）。dsh 装插件只 spawn 裸命令 `pnpm`（缺了报 `spawn pnpm ENOENT`，[F28](docs/ISSUES.md)），而 pnpm 的 `view`/`add` 又会把请求转发给裸命令 `npm`（缺了会落到系统那份 10.9.3，被自带 node 24 跑起来就崩，[F29](docs/ISSUES.md)）。插件装进 `.dsh-home` 下的 profile 子目录，**需要能访问 npm registry**（默认 npmmirror），装完重启应用一次才加载 |
 | 尺寸 | 包内 `app/` **约 1014MB / 6.6 万个文件**（0.7.0 的 pnpm+npm 约 +37MB）；fnpack 压出的 **`dsh.fpk` 约 208MB**（0.6.8 实测 199MB）；装完实测 **957M / 63056 个文件**（0.6.8，`du -sh /vol1/@appcenter/dsh`，不含软链的 `/var/apps/dsh`） |
 | 已知问题 | 见 [docs/ISSUES.md](docs/ISSUES.md) |

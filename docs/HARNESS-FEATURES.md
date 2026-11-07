@@ -1,7 +1,7 @@
 # DeepSeek Harness 功能清单（以及对飞牛的可移植性）
 
 状态：**v1.0（2026-11-02）**　底本：`deepseek-harness` master `ce7073d`（`0.2.2-alpha.2`）
-本包实际运行：`@deepseek-ai/dsh@0.2.1-rc.5`（web 形态）
+本包实际运行：`@deepseek-ai/dsh@0.2.2-rc.1`（web 形态，0.9.0 起）
 
 > 配套文档：[HARNESS-ARCHITECTURE.md](HARNESS-ARCHITECTURE.md)（它讲"为什么只能这么封装"），
 > 本文讲"**功能到底有哪些、在飞牛上哪一档**"。

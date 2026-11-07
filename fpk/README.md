@@ -38,7 +38,7 @@ bash selftest.sh          # 30 秒，不需要 root、不占 3080
 bash build.sh full        # 捆绑 node + dsh + pnpm + npm；包内约 1014MB，压出的 dsh.fpk 约 208MB
 ```
 
-`full` 会把 `nodejs_v24` 的 node、`@deepseek-ai/dsh@0.2.1-rc.5`、`pnpm@10.34.9` 与
+`full` 会把 `nodejs_v24` 的 node、`@deepseek-ai/dsh@0.2.2-rc.1`、`pnpm@10.34.9` 与
 `npm@11.21.1` 装进 `app/runtime/`（dsh 版本钉在 `build.sh` 顶部，可用 `DSH_VERSION=` 覆盖，
 钉版理由见 PLAN §3.2；pnpm 用 `DSH_PNPM_VERSION=`、npm 用 `DSH_NPM_VERSION=` 覆盖）。
 两个包管理器都要，理由是 [ISSUES F28](../docs/ISSUES.md) / [F29](../docs/ISSUES.md)：

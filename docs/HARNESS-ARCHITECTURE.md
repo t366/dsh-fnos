@@ -383,6 +383,22 @@ npm dist-tags 本次实测：`latest = next = 0.2.1-rc.5`，`alpha = 0.2.2-alpha
 `--dump-config` 里 `webServer/connection` 两行还在 → `dsh web:` 那行日志格式没变 →
 带 node 版本 ≥24.9 打出包、装机跑 `probe/05`。
 
+### 11.3.1 后续（2026-11-07：跟到 `0.2.2-rc.1`，包 0.9.0）
+
+§11.3 的「转 rc 再跟」前提已满足：npm 实测 `latest = next = 0.2.2-rc.1`
+（`alpha = 0.2.2-alpha.3`），GitHub 11-04 发布 `v0.2.2-rc.1`。据此决策翻案：
+
+- `0.2.1-rc.5` → `0.2.2-rc.1`（`build.sh` 的 `DSH_VERSION`）。
+- `skill-office` 仍随主包发布（同版本号），0.8.1 的 `--patch` 挂载链路依赖不变。
+- §11.2-2 的 4 个 bundle 继续随行（包体积纯增量，装机后再量一次）。
+- 自带 node `v24.22.1` ≥ 24.9，发布包声明的 `engines.node` 门槛满足；
+  build.sh 那条打包期硬检查从本版起**真正有约束力**。
+- 安全策略变化：文件修改前读取检查、外部修改防护**默认关闭**（沙箱与 Review
+  保留）——已写进 manifest changelog。
+- 上游有桌面端 rc.5→rc.1 插件配置丢失案例（34→2 条）；本包 0.7.2 起升级前
+  自动快照 `.dsh-home` 到 `@appshare/dsh/backups`，回滚按 RUNBOOK 走。
+- 升级后按上面三件事重验 + selftest 全量。
+
 ### 11.4 一个被否掉的"机会"
 
 新出现的 `sandbox-policy.additionalWritableRoots`（`docs/config-catalog.md:2922`，

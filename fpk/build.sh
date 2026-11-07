@@ -26,7 +26,11 @@ MODE="${1:-skeleton}"
 # 0.7.1 起跟到 rc.5：rc.4 是「无变更重发」（内容与 rc.3 逐字节相同），
 # rc.5 的改动是对话里思考内容的展示优化（纯前端）。rc.3→rc.5 依赖集完全一致
 # （86 个包，只有版本号变），没有新增原生件或新引擎要求。
-DSH_VERSION="${DSH_VERSION:-0.2.1-rc.5}"
+# 0.9.0 起跟到 0.2.2-rc.1：0.2.2 线首个 RC，npm 实测 latest = next = 0.2.2-rc.1
+# （alpha = 0.2.2-alpha.3）。自带 skill-office，--patch 挂载链路依赖仍在；
+# 发布包声明 engines.node >= 24.9.0（0.2.1-rc.5 没有，门槛检查从此处起真正生效）。
+# 已知事故：桌面端 rc.5→rc.1 有插件配置丢失案例，升级前快照（0.7.2 起）兜底。
+DSH_VERSION="${DSH_VERSION:-0.2.2-rc.1}"
 # dsh 自己不实现包管理：插件安装/查询全部转发给 pnpm（`pnpm view`、`pnpm add`），
 # 而且只认 PATH 上的裸命令 "pnpm" → 不带 pnpm 时 Web 界面报 `spawn pnpm ENOENT`。
 # 钉 10.x 的理由：dsh 的引导文案让用户改 pnpm-workspace.yaml 里的 allowBuilds，

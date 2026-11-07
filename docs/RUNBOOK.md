@@ -101,16 +101,16 @@ bash build.sh full 2>&1 | tee ~/build-$(grep -E '^version' manifest | cut -d'"' 
 
 ```
 跳过 0 / 失败 0
-dsh 版本校验通过：0.2.1-rc.5
+dsh 版本校验通过：0.2.2-rc.1
 pnpm 自检通过：10.34.9（app/runtime/pnpm 23M）
 npm 自检通过：11.21.1（app/runtime/npm 20M）
 端到端自检通过：pnpm view lodash version -> 4.18.1
 app/ 文件数：6.6 万左右
-产物：./dsh.fpk（约 208M，版本 0.8.0）
+产物：./dsh.fpk（约 208M，版本 0.9.0）
 ```
 
-- **`dsh 版本校验通过：0.2.1-rc.5` 必须是 rc.5**：这行是回读装进来的 `package.json` 得到的，
-  不是打印请求值。若显示 rc.3，说明跑的还是改之前那份 `build.sh`（或 `DSH_VERSION` 被环境覆盖）。
+- **`dsh 版本校验通过：0.2.2-rc.1` 必须是 rc.1**：这行是回读装进来的 `package.json` 得到的，
+  不是打印请求值。若显示 rc.5 或更旧，说明跑的还是改之前那份 `build.sh`（或 `DSH_VERSION` 被环境覆盖）。
 
 - Linux 上「跳过」必须是 **0**。开发机（Windows）上的 26 项跳过是权限位、`/proc`、
   进程组这些只能在真机判定的断言，这里会真正执行。

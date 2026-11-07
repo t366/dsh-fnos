@@ -1535,3 +1535,51 @@ F21 的结论是 x86 上非特权 userns 可用，不能假设 ARM 一样。
 | `docs/HARNESS-ARCHITECTURE.md` | §5.1 更正（闸门只在 CLI）+ 新增 §5.5（为何仍用 relay）+ §11.1 措辞修正 |
 | `docs/ISSUES.md` | T7 补两条实现参考；新增 T12（双架构）；T13（安全上下文 API，已核） |
 | `PLAN.md` / `README.md` | 同一处事实的措辞修正；文档索引加 REFERENCE-PROJECTS |
+
+## 阶段 37（2026-11-07）　运行时跟到 dsh 0.2.2-rc.1（包 0.9.0）
+
+### 37.1　上游动态（npm + GitHub 双源核实）
+
+0.2.2 线三连发：alpha.2（10-28）→ alpha.3（11-03）→ **rc.1（11-04）**。
+npm dist-tags 实测：`latest = next = 0.2.2-rc.1`，`alpha = 0.2.2-alpha.3`。
+T9 的「转 rc 再跟」前提满足，决策翻案（原判断见阶段 34 与 ARCHITECTURE §11.3）。
+
+### 37.2　跟版依据与风险
+
+- `skill-office` 仍随主包发布（`@deepseek-ai/dsh-skill-office@0.2.2-rc.1`），
+  0.8.1 的 `--patch` 挂载链路依赖不变；主包结构（`bin/dsh → lib/bin.js`）没变。
+- 发布包声明 `engines.node >= 24.9.0`（rc.5 没有）——build.sh 的打包期硬门槛
+  从本版起**真正有约束力**；自带 node v24.22.1 满足。
+- 依赖集新增多个 `dsh-experimental-*` bundle（alpha 线就有的趋势延续），
+  web 形态不激活，包体积纯增量，装机后再量。
+- **风险一（安全策略）**：文件修改前读取检查、外部修改防护默认关闭
+  （沙箱限制与 Review 保留）。已写进 manifest changelog 与 README。
+- **风险二（配置丢失案例）**：上游有桌面端 rc.5→rc.1 插件配置条目 34→2 的
+  事故，且首次启动直接失败、无自动回滚。本包 0.7.2 起升级前自动快照
+  `.dsh-home` 到 `@appshare/dsh/backups`，正好兜底；RUNBOOK 有回滚步骤。
+
+### 37.3　0.2.2-rc.1 值得用户知道的（写进了 changelog）
+
+宿主级统一管理自动化任务（跨会话）、实验性「变更请求与工作树」审查入口、
+`apply_patch` 多文件修改（默认关）、插件安装失败完整诊断 + Host 日志入口、
+修复历史会话打不开 / 会话搜索失败 / 聊天记录加载卡住、手机浏览器窄屏布局优化。
+
+### 37.4　改动清单
+
+| 位置 | 改动 |
+|---|---|
+| `fpk/build.sh` | `DSH_VERSION` 默认 `0.2.1-rc.5` → `0.2.2-rc.1`，注释补跟版理由与风险 |
+| `fpk/manifest` | version `0.8.1` → `0.9.0`，changelog 前置 0.9.0 条目（含安全策略提示与快照兜底说明） |
+| `docs/HARNESS-ARCHITECTURE.md` | 新增 §11.3.1：决策翻案记录 + 升级后重验清单 |
+| `docs/ISSUES.md` | T9 总览行与详情段标 ✅（11-07 跟到 rc.1），原文保留 |
+| `PLAN.md` §3.2 | dist-tags 表更新到 11-04 实测；决策段补 11-07 依据 |
+| `README.md` / `fpk/README.md` / `docs/HARNESS-FEATURES.md` | 当前运行版本字样更新 |
+| `docs/RUNBOOK.md` | 自测预期输出改为 `0.2.2-rc.1` / 版本 `0.9.0` |
+
+### 37.5　装机时要做（NAS 侧）
+
+1. `git pull` → `bash build.sh full`（自测会全量重跑，含 skill-office 三项依赖验证）。
+2. `dsh 版本校验通过：0.2.2-rc.1` 必须出现。
+3. 升级后按 ARCHITECTURE §11.3 的三件事重验：`--dump-config` 的
+   `webServer/connection` 两行、`dsh web:` 日志格式、`probe/05`。
+4. 量一次 `app/` 体积与文件数（bundle 增量多少）。
