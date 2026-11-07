@@ -1605,3 +1605,31 @@ T9 的「转 rc 再跟」前提满足，决策翻案（原判断见阶段 34 与
 **教训**：骨架模式从来不是「安全的小包」，是「盘上有什么就打什么」；
 第一次踩中是因为历史 full 构建的残留恰好还在。守卫以后两种正确路径：
 真骨架（先手动清）或 full。
+
+### 37.7　0.2.2-rc.1 全面适配检查（2026-11-07 20:08–20:20，SSH 上机逐项验证）
+
+装机 0.9.1（引擎 0.2.2-rc.1）后，按 ARCHITECTURE §11 契约清单逐项核验：
+
+| 契约 | 结果 |
+|---|---|
+| CLI 六参数（--profile web / --patch / --host / --port / --no-open / --trusted-host） | ✅ `web --help` 逐个确认；--host 仍拒绝通配地址 |
+| `dsh web:` 机器行（带 token 的 URL） | ✅ 仍在；rc.1 另新增一行人读文案（listening on …），我们的泛匹配不受影响 |
+| `--dump-config` 的 webserver / connection | ✅ 隔离 HOME 实测两块都在 |
+| skill-office --patch | ✅ 真机 enabled（assets + libreoffice-kit CLI 齐）；自测沙箱按设计跳过 |
+| relay + --trusted-host 多网卡 | ✅ .109→.114 转发正常，healthz 200，dsh=401（栅栏放行） |
+| pnpm 10.34.9 / npm 11.21.1 转发链 | ✅ start 日志记录正常 |
+| probe/05 装机验收 | ✅ 修复后 PASS 54 / WARN 1 / FAIL 0（WARN 为既知设计） |
+
+**检查中修掉的两个问题**：
+
+1. `@local/uparrow-history` 被 rc.1 兼容栅栏跳过（peerDependencies 钉死
+   0.2.1-rc.5，报错栈曾被误读为崩溃）。修法：workspace 里的插件源
+   peerDependencies 升到 0.2.2-rc.1（cordis ~4.0.5→~4.1.0），重启后正常加载。
+   原文件备份为 package.json.bak-rc5。`@local/web-search-ddg` 无 dsh peer 依赖，不受影响。
+2. probe/05 图标检查在真机恒 FAIL：装机后平台把 ui/config 的 icon 字段归一成
+   ui 相对路径（images/icon_{0}.png），probe 按包根拼接查错位置。已改为两处
+   都接受（dffcb82）。
+
+**结论：0.2.2-rc.1 对本包的全部封装契约无破坏性变化，无需改 wrapper 代码。**
+唯一需要注意的产品面变化仍是 37.2 的安全策略默认值（文件修改前读取检查与
+外部修改防护默认关闭）。
