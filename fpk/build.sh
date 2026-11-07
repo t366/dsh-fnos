@@ -403,6 +403,24 @@ if [ "$MODE" = "full" ]; then
     ' ../profile/office.patch.yml "$PWD" || die "Office 补丁校验失败（见上）"
   )
 
+  # ---- 运行时瘦身：删 node_modules 里运行时永不读的文件（0.9.2 性能优化）----
+  # 只删两类，均有实证依据：
+  #   · *.map 源映射——只有 --enable-source-maps 时才读，NAS 上没人开；
+  #   · 测试/示例/文档目录——test(s)/__tests__/example(s)/docs/.github。
+  # 明确不删的（都论证过，见 DEVLOG 37.9）：
+  #   · *.md——技能体系是 Markdown 驱动的，assets/*/SKILL.md 是运行时数据；
+  #   · @deepseek-ai/dsh-experimental-*——0.2.2 的新能力（worktree/agent-team/
+  #     voice-input/inspector）都在里面，懒加载，删了 UI 一开就断；
+  #   · libreoffice-kit-wasm 下的一切——Office 三技能的本体（146M）。
+  _R=app/runtime/app/node_modules
+  _before="$(du -sm "$_R" 2>/dev/null | cut -f1)"
+  find "$_R" -type f -name '*.map' -delete 2>/dev/null || true
+  find "$_R" -type d \( -name test -o -name tests -o -name __tests__ \
+      -o -name example -o -name examples -o -name docs -o -name .github \) \
+      -not -path '*libreoffice-kit-wasm*' -prune -exec rm -rf {} + 2>/dev/null || true
+  _after="$(du -sm "$_R" 2>/dev/null | cut -f1)"
+  say "运行时瘦身：node_modules ${_before:-?}M -> ${_after:-?}M"
+
   # ---- pnpm：dsh 装插件时唯一的包管理器（版本理由见文件头 DSH_PNPM_VERSION）----
   # 放在 runtime/pnpm 而不是 app/node_modules：dsh 每次 full 构建都会整棵树重装，
   # 混进去会让「这是 dsh 的依赖还是我们的工具」说不清，也容易被一起清掉。
