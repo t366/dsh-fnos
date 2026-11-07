@@ -1652,3 +1652,35 @@ office 补丁层）。dsh 用户随后启动时 EACCES 读补丁 → 端口未�
 `cmd/main stop` 杀不动 root 进程（pidfile 又被失败启动覆盖）。修复：kill 残留
 pid + chown dsh:dsh 五个文件。**教训照旧：手工启动一律 `su -s /bin/bash dsh`，
 不要用 root 直接 start**（RUNBOOK 已有此规矩，这次是执行者违规）。
+
+### 37.9　性能优化：运行时瘦身 + V8 字节码缓存（2026-11-07 20:50–21:05，包 0.9.2）
+
+基线（SSH 实测）：dsh 主进程 RSS 354MB（11.7G 内存 8 核，无调优必要）；
+冷启动 cwd→ok 5–6 秒；app 运行时 897M / 69452 文件（fpk 才 216M）。
+
+**做了什么：**
+
+| 优化 | 实测收益 | 落点 |
+|---|---|---|
+| node_modules 瘦身：删 `*.map`（4573 个）+ 测试/示例/文档目录（273 个） | **897M→745M（-152M）、69452→53827 文件（-15625）** | build.sh full 模式新增步骤 + 已装机树就地执行 |
+| `NODE_COMPILE_CACHE`（Node 24 原生 V8 字节码缓存） | **冷启动 5–6 秒 → 4 秒（约 -30%）** | cmd/main 给 dsh 进程导出，落 `@appdata/dsh/compile-cache` |
+
+**两个关键取舍（都先求证过再动手）：**
+
+- **不删 `*.md`**：本想连 14M 文档一起删，查证发现 dsh 技能体系是 Markdown
+  驱动的——`dsh-skill-office/assets/*/SKILL.md` 是运行时数据，删了三个
+  Office 技能直接报废。瘦身集合里因此明确排除。
+- **不删 `dsh-experimental-*`（60M）与不做 `npm prune --omit=dev`**：
+  主包 lib 零引用、日志零加载，看似纯增肥，但 0.2.2 的新能力（worktree
+  审查 / agent-team / voice-input / inspector）都在这些包里，且走懒加载
+  （dsh-lazy-require），用户在 UI 里一开就 require。为省 100M 断掉本次
+  升级的目标功能，不划算。prune 会把它们当不可达节点删掉，同理放弃。
+
+**compile-cache 的坑**：环境变量传进去后目录一直是空的——V8 缓存是
+**进程退出时**才落盘（最小用例 `node -e` 秒退所以立刻可见，常驻进程不写）。
+第一次重启后落盘 5285 个文件 / 32M，第二次重启起命中。缓存目录放 @appdata：
+随卸载消失、应用用户可写、坏了删掉自动重建。
+
+**验证**：office 补丁 enabled、插件零 skip、probe/05 PASS 54 / WARN 1 /
+FAIL 0（与优化前持平）。改动提交 b14d6ef，manifest 提 0.9.2（0.9.1 的
+已装机树是就地修补的，下次重打包需 0.9.2 才能覆盖安装）。
