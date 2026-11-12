@@ -180,13 +180,11 @@ line ""
 line "## 4. 运行时"
 line ""
 
-SYS_NODE_OK=0
 if have node; then
   NODE_V="$(node -v 2>/dev/null)"
   line "- 系统 node：\`$NODE_V\` @ \`$(command -v node)\`"
   NODE_VN="${NODE_V#v}"
   if ver_ge "$NODE_VN" "$NODE_FLOOR"; then
-    SYS_NODE_OK=1
     verdict OK "系统 Node 满足 ≥$NODE_FLOOR" "$NODE_V"
   else
     verdict WARN "系统 Node 版本不足" "$NODE_V < v$NODE_FLOOR"

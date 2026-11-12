@@ -532,7 +532,7 @@ if [ -n "$BINDIP" ]; then
   # 都应当可达：dsh 绑一个，其余由 relay 接住、并登记进 --trusted-host。
   if [ "$HAS_DSH" = "yes" ]; then
     # 跳过 dsh 真正绑定的那个地址（不能用 BINDIP：launcher 绑了通配时它已被归一成回环）
-    DSHBIND="$(ss -ltnp 2>/dev/null | grep -E ":$DPORT[[:space:]]" | head -n1 | awk '{print $4}' | sed 's/:[0-9]*$//')"
+    DSHBIND="$(ss -ltnp 2>/dev/null | grep -E ":${DPORT}[[:space:]]" | head -n1 | awk '{print $4}' | sed 's/:[0-9]*$//')"
     [ -n "${DSHBIND:-}" ] || DSHBIND="$BINDIP"
     NIPS=0
     for IP in $(ip -4 -o addr show scope global 2>/dev/null \

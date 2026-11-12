@@ -42,7 +42,7 @@ echo "manifest=$M"; grep -E '^[[:space:]]*version' "$M"
 顺手确认一下仓库里的版本（第 1 步 `git pull` 之后再跑）：
 
 ```bash
-grep -E '^version' ~/dsh-fnos/fpk/manifest    # 应与 README「包版本」一致（本文写于 0.8.0）
+grep -E '^version' ~/dsh-fnos/fpk/manifest    # 应与 README「包版本」一致（本文最后核对于 0.9.2）
 ```
 
 > 为什么必须管：`appcenter-cli install-fpk` 对已装应用只回一句 `is installed`，
@@ -62,7 +62,7 @@ git log --oneline -1
 判据以工作区实际内容为准，不用记 commit 号：
 
 ```bash
-grep '^version' fpk/manifest                      # 与 README「包版本」一致（本文写于 0.8.0）
+grep '^version' fpk/manifest                      # 与 README「包版本」一致（本文最后核对于 0.9.2）
 grep -c '@appshare' fpk/build.sh                  # 必须 > 0（F20 的落点修复在里面）
 ```
 
@@ -88,7 +88,7 @@ grep -c '@appshare' fpk/build.sh                  # 必须 > 0（F20 的落点�
 
 ---
 
-## 第 2 步　打包（5–15 分钟；包内约 1015MB，产出 `dsh.fpk` 约 208MB）
+## 第 2 步　打包（5–15 分钟；包内约 745MB，产出 `dsh.fpk` 约 216MB）
 
 ```bash
 cd ~/dsh-fnos/fpk
@@ -105,14 +105,14 @@ dsh 版本校验通过：0.2.2-rc.1
 pnpm 自检通过：10.34.9（app/runtime/pnpm 23M）
 npm 自检通过：11.21.1（app/runtime/npm 20M）
 端到端自检通过：pnpm view lodash version -> 4.18.1
-app/ 文件数：6.6 万左右
-产物：./dsh.fpk（约 208M，版本 0.9.1）
+app/ 文件数：5.4 万左右（0.9.2 瘦身后；超过 4 万仍会打「变慢」提示，属预期）
+产物：./dsh.fpk（约 216M，版本 0.9.2）
 ```
 
 - **`dsh 版本校验通过：0.2.2-rc.1` 必须是 rc.1**：这行是回读装进来的 `package.json` 得到的，
   不是打印请求值。若显示 rc.5 或更旧，说明跑的还是改之前那份 `build.sh`（或 `DSH_VERSION` 被环境覆盖）。
 
-- Linux 上「跳过」必须是 **0**。开发机（Windows）上的 26 项跳过是权限位、`/proc`、
+- Linux 上「跳过」必须是 **0**。开发机（Windows）上的 32 项跳过是权限位、`/proc`、
   进程组这些只能在真机判定的断言，这里会真正执行。
 - **通过数只作参考**（每加一条断言就会变），真正的判据是 **`跳过 0 / 失败 0`**。
 - **`pnpm 自检通过` 与 `npm 自检通过` 都必须出现**（0.7.0 起）：前者证明 pnpm 装进了 runtime
@@ -140,7 +140,7 @@ app/ 文件数：6.6 万左右
 
 ## 第 3 步　先把包下载到电脑（**必须在安装前**）
 
-飞牛 → 文件管理 → 共享目录 `dsh / workspace` → 下载 `dsh.fpk`（约 199MB）。
+飞牛 → 文件管理 → 共享目录 `dsh / workspace` → 下载 `dsh.fpk`（约 216MB）。
 
 `build.sh` 打完会自动把包复制到共享目录，正常会打印：
 

@@ -35,7 +35,7 @@
 ```bash
 cd ~/dsh-fnos/fpk
 bash selftest.sh          # 30 秒，不需要 root、不占 3080
-bash build.sh full        # 捆绑 node + dsh + pnpm + npm；包内约 1014MB，压出的 dsh.fpk 约 208MB
+bash build.sh full        # 捆绑 node + dsh + pnpm + npm；包内约 745MB（0.9.2 瘦身后），压出的 dsh.fpk 约 216MB
 ```
 
 `full` 会把 `nodejs_v24` 的 node、`@deepseek-ai/dsh@0.2.2-rc.1`、`pnpm@10.34.9` 与
@@ -46,11 +46,32 @@ dsh 装插件只 `spawn("pnpm")`，缺 pnpm 报 `spawn pnpm ENOENT`；而 pnpm �
 又把请求转发给裸命令 `npm`，缺 npm 时会落到系统那份 10.9.3，被自带 node 24 跑起来直接崩。
 打包末尾会有三条自检（pnpm 版本、npm 版本、真的跑一次 `pnpm view`），任一条不过就中止。
 打完自动复制到共享目录。`bash build.sh`（不带参数）只打骨架包，用占位服务验证安装链路。
+`full` 模式顺带做 node_modules 瘦身：删 `*.map` 与测试/示例/文档目录（保留 SKILL.md，
+技能要靠它发现），这是 0.9.2 把包内体积从 897M 降到 745M 的手段；打包后改回 `version`
+就能重打，瘦身是幂等的。
 
 `selftest.sh` 会伪造 `TRIM_*` 环境，在临时目录里跑一遍
 `install_init → install_callback → start → status → HTTP → 重复 start → stop → 重复 stop`，
 外加入口跳转器的 HTTP 行为（自动跳转、配对、限速）。直接装 fpk 失败时只能看到一个笼统错误，
 自测能精确告诉你是哪一步。
+
+## 依赖清单
+
+包内捆绑的全部运行时依赖（无 npm 平方依赖，全部钉版）：
+
+| 依赖 | 版本 | 作用 | 安装方式 |
+|---|---|---|---|
+| Node.js（linux-x64） | `v24.22.1` | dsh 与四个自写 mjs 服务（launcher / relay / stub / ensure-default-workspace）的运行时；满足 dsh `engines >=24.9.0` | `build.sh` 从 nodejs.org 下载官方压缩包并校验后解入 `app/runtime/node` |
+| `@deepseek-ai/dsh` | `0.2.2-rc.1` | 应用本体（DeepSeek Harness web 形态） | `build.sh` 用 `DSH_VERSION`（默认钉在脚本顶部）从 npm 安装 |
+| pnpm | `10.34.9` | 插件安装链的包管理器（dsh 只 `spawn("pnpm")`，[F28](../docs/ISSUES.md)） | `build.sh` 用 `DSH_PNPM_VERSION` 装入 `app/runtime/pnpm` |
+| npm | `11.21.1` | pnpm `view`/`add` 的转发目标（裸命令 `npm`，[F29](../docs/ISSUES.md)） | `build.sh` 用 `DSH_NPM_VERSION` 装入 `app/runtime/npm` |
+| skill-office | 随 dsh 附带 | Office 渲染/重算/导出的 wasm 引擎（0.8.1 起经 `--patch` 挂载，[F37](../docs/ISSUES.md)） | dsh 包内自带，`cmd/main` 挂载 |
+
+构建期依赖（NAS 本机，不进包）：`fnpack`（fnOS 打包器）、bash 4+、coreutils、`ss`、`curl`。
+开发期工具（Windows/任意机器）：bash（Git Bash 即可）、node、python3（仅 `scripts/make-icons.py`）、shellcheck（静态检查，可选）。
+
+本地插件 [plugin-web-search-ddg](../plugin-web-search-ddg/)（DuckDuckGo Lite 搜索，无需 API Key）
+零 npm 依赖，纯 Node 内置 fetch。
 
 ## 入口是怎么做的（0.5.0 起：点图标即进）
 

@@ -11,17 +11,17 @@
 
 | 项 | 值 |
 |---|---|
-| 包版本 | **0.8.1（代码与本地自测完成，待真机验收）**。相对 0.7.3 两件事：<br>① **0.8.0 多网卡入口**：dsh 的 CLI 拒绝「通配地址」，只接受某个具体接口的 IP（[HARNESS-ARCHITECTURE §5.1](docs/HARNESS-ARCHITECTURE.md)），所以以前只有被选中的那个地址能进——真机 .109（无线）/ .114（OVS）并存时，从另一个网段点图标就是连接被拒。现在启动时枚举本机 IPv4：dsh 仍绑主地址，其余地址由新增的 `relay` 在 **TCP 层**原样接住（不改 Host、不改字节，WS 与 cookie 都不受影响），并登记进 `--trusted-host`；跳转器改为通配监听、按「请求从哪个地址进来」选 302 目标（白名单校验，防 DNS rebinding）。单网卡机器行为不变。<br>② **0.8.1 Office 技能**：web 形态默认不挂 `skill-office`，而它的渲染引擎早随 dsh 装进了包里（wasm，约 152MB，一直闲置）。现在用 `--patch` 覆盖层挂上，换来「渲染预览 / 公式重算 / 导出 PDF」，**失败即降级**（三条路径缺一就不传 `--patch`）。<br>本地自测 65 通过 / 32 跳过 / 0 失败（Windows；dsh 编排段需 Linux） |
-| 上一版验收 | **0.7.3 已在 NAS 真机装成并验收**：升级快照改落 `@appshare/dsh/backups`、`main` 启动时按 `.modules.yaml` 自动对齐 pnpm store |
-| 最近一次完整真机验收 | **0.6.7**：图标、启停入口、「访问权限」页均已确认；0.5.0 时为 `probe/05` **33 PASS / 1 WARN / 0 FAIL**、`probe/07` **10 PASS / 0 FAIL**。待验项见 [ISSUES 的 P1/P2](docs/ISSUES.md) |
+| 包版本 | **0.9.2（真机 0.9.1 已验收；0.9.2 为性能优化版，待重打包装机）**。相对 0.7.3 的关键变化：<br>① **0.8.0 多网卡入口（已真机验证）**：dsh 的 CLI 拒绝「通配地址」，只接受某个具体接口的 IP（[HARNESS-ARCHITECTURE §5.1](docs/HARNESS-ARCHITECTURE.md)），所以以前只有被选中的那个地址能进——真机 .109（无线）/ .114（OVS）并存时，从另一个网段点图标就是连接被拒。现在启动时枚举本机 IPv4：dsh 仍绑主地址，其余地址由新增的 `relay` 在 **TCP 层**原样接住（不改 Host、不改字节，WS 与 cookie 都不受影响），并登记进 `--trusted-host`；跳转器改为通配监听、按「请求从哪个地址进来」选 302 目标（白名单校验，防 DNS rebinding）。单网卡机器行为不变。<br>② **0.8.1 Office 技能（已真机验证）**：web 形态默认不挂 `skill-office`，而它的渲染引擎早随 dsh 装进了包里（wasm，约 152MB，一直闲置）。现在用 `--patch` 覆盖层挂上，换来「渲染预览 / 公式重算 / 导出 PDF」，**失败即降级**（三条路径缺一就不传 `--patch`）。<br>③ **0.9.x 引擎跟到 `0.2.2-rc.1`**：封装契约逐项核验无破坏（DEVLOG 37.7），Office 三技能真机实测通过（37.8）<br>④ **0.9.2 性能优化**：node_modules 瘦身（897M→745M、6.9 万→5.4 万个文件）+ Node 24 原生 V8 字节码缓存（冷启动 5-6 秒→4 秒）<br>本地自测 65 通过 / 32 跳过 / 0 失败（Windows；dsh 编排段需 Linux） |
+| 上一版验收 | **0.9.1 已在 NAS 真机装成并验收（2026-11-07）**：`probe/05` **54 PASS / 1 WARN / 0 FAIL**、`probe/07` **11 PASS / 0 FAIL**；多网卡转发、Office 三技能、插件安装链、pnpm/npm 转发链全部实测通过（DEVLOG 37.7/37.8） |
+| 更早的真机验收 | 0.7.3（2026-11-01）：升级快照改落 `@appshare/dsh/backups`、启动时按 `.modules.yaml` 自动对齐 pnpm store；0.6.7（2026-10-28）：图标、启停入口、「访问权限」页确认 |
 | 数据落点 | 共享目录 `dsh/workspace/.dsh-home`（**跨卸载存活**，已实测） |
 | 默认工作区 | `dsh/workspace/deepseek-harness/default-workspace`（0.6.6 起自动建；原理见 [ISSUES F22](docs/ISSUES.md)） |
 | 任意文件夹当工作区 | 应用设置 →「访问权限」授权目录（读写）→ dsh 里「+ 添加工作区」→ 点首屏的 **「可访问目录」** 选中（0.6.8 起；见 [ISSUES F23](docs/ISSUES.md) / [F24](docs/ISSUES.md)） |
 | 多网卡访问 | 0.8.0 起自动：主地址由 dsh 直服，其余本机 IPv4 由 `relay` 接住并加入 `--trusted-host`。手工指定用 `DSH_EXTRA_IPS=192.168.0.109,192.168.0.114`（逗号分隔，排障用） |
-| Office 文档 | 0.8.1 起 **渲染预览 / 公式重算 / 导出 PDF** 可用（dsh 自带的 LibreOffice Kit，无需系统装 LibreOffice）。**生成** docx/xlsx/pptx 需要宿主 Python 库，见 [HARNESS-FEATURES §3.1](docs/HARNESS-FEATURES.md) |
-| 运行时 | 自带 Node 24（`v24.22.1`）+ `@deepseek-ai/dsh@0.2.2-rc.1`（0.9.0 起；钉版理由与升级记录见 [PLAN §3.2](PLAN.md)。注意：文件修改前读取检查与外部修改防护上游默认关闭） |
+| Office 文档 | 0.8.1 起 **渲染预览 / 公式重算 / 导出 PDF** 可用（dsh 自带的 LibreOffice Kit，无需系统装 LibreOffice），0.9.1 真机三技能实测通过（2026-11-07）。**生成** docx/xlsx/pptx 需要宿主 Python 库，见 [HARNESS-FEATURES §3.1](docs/HARNESS-FEATURES.md) |
+| 运行时 | 自带 Node 24（`v24.22.1`，满足 dsh `engines >=24.9.0`）+ `@deepseek-ai/dsh@0.2.2-rc.1`（0.9.0 起；钉版理由与升级记录见 [PLAN §3.2](PLAN.md)。注意：文件修改前读取检查与外部修改防护上游默认关闭）。0.9.2 起给 dsh 配 V8 字节码缓存（落 `@appdata/dsh/compile-cache`，随卸载消失，损坏删掉自动重建） |
 | 插件 | 0.7.0 起运行时**成套自带 pnpm 10.34.9 + npm 11.21.1**（`runtime/pnpm`、`runtime/npm`，各配 `runtime/node/bin/` 下的 wrapper）。dsh 装插件只 spawn 裸命令 `pnpm`（缺了报 `spawn pnpm ENOENT`，[F28](docs/ISSUES.md)），而 pnpm 的 `view`/`add` 又会把请求转发给裸命令 `npm`（缺了会落到系统那份 10.9.3，被自带 node 24 跑起来就崩，[F29](docs/ISSUES.md)）。插件装进 `.dsh-home` 下的 profile 子目录，**需要能访问 npm registry**（默认 npmmirror），装完重启应用一次才加载 |
-| 尺寸 | 包内 `app/` **约 1014MB / 6.6 万个文件**（0.7.0 的 pnpm+npm 约 +37MB）；fnpack 压出的 **`dsh.fpk` 约 208MB**（0.6.8 实测 199MB）；装完实测 **957M / 63056 个文件**（0.6.8，`du -sh /vol1/@appcenter/dsh`，不含软链的 `/var/apps/dsh`） |
+| 尺寸 | 包内 `app/` **约 745MB / 5.4 万个文件**（0.9.2 瘦身后实测，瘦身前 897M / 6.9 万）；fnpack 压出的 **`dsh.fpk` 约 216MB**（0.9.x 实测） |
 | 已知问题 | 见 [docs/ISSUES.md](docs/ISSUES.md) |
 
 > 侧载包**没有 CLI 升级通道**：`appcenter-cli install-fpk` 对已装应用只回一句 `is installed`。
@@ -55,12 +55,20 @@ fpk/                    应用本体（打包成 dsh.fpk）
   build.sh              在 NAS 上打包：bash build.sh（骨架）/ bash build.sh full（捆绑 dsh）
   selftest.sh           打包前自测：伪造 TRIM_* 环境跑完整生命周期 + 跳转器 HTTP 行为
 probe/                  真机脚本：评估、冒烟、安装验收、cookie 持久性
+plugin-web-search-ddg/  本地 dsh 插件源码：DuckDuckGo Lite 搜索（零 npm 依赖）
 docs/                   开发记录、问题台账、官方规范摘录
 scripts/                make-icons.py（生成应用图标，只用标准库，不需要 Pillow）
 PLAN.md                 技术方案
 ```
 
 ## 快速开始
+
+**环境要求**
+
+- 飞牛 fnOS（**x86_64 机型**；ARM 装不上，`build.sh` 与平台门禁会双重拦截）；
+- 安装位置预留 **≥2GB** 空间（fpk 约 216MB，装完约 750MB，另加数据目录）；
+- 无需 Docker、无需 root 操作；浏览器访问 `NAS:3080`（多网卡机器任意网段都行，见「当前状态」①）；
+- 打包必须在 NAS 上执行（`fnpack` 是 fnOS 自带）；开发机（Windows/Linux/macOS）只改脚本与跑自测（需 bash、node）。
 
 **打包（只有这一步在命令行，必须在 NAS 上）**
 
@@ -87,6 +95,17 @@ bash ~/dsh-fnos/probe/05-verify-fpk.sh          # 结构 + 入口端到端
 bash ~/dsh-fnos/probe/07-cookie-persistence.sh  # 会重启一次应用，验证重启后还能进
 ```
 
+**功能使用**
+
+日常使用就是浏览器里的 dsh 界面（对话、技能、终端、文件工具都在里面）。使用侧须知：
+
+- 技能与功能的开箱/开关状态：[HARNESS-FEATURES](docs/HARNESS-FEATURES.md)；
+- Office 文档预览、公式重算、导出 PDF（0.8.1 起可用）：见「当前状态」② 与
+  [ISSUES「F37」](docs/ISSUES.md)；
+- 本地插件（DuckDuckGo 搜索）与 pnpm/npm 转发链：[fpk/README](fpk/README.md)；
+- 配置项（API Key、入口方式、可访问目录）在安装/升级向导里改，说明见
+  [fpk/README](fpk/README.md)；数据都在共享目录 `dsh/workspace/.dsh-home`，卸载选「保留」即留存。
+
 ## 安全边界（必须知道）
 
 `auto` 模式下，**能访问到 `NAS:3080` 的内网设备等于能直接操作 dsh**——它带终端与文件工具。
@@ -104,9 +123,9 @@ bash ~/dsh-fnos/probe/07-cookie-persistence.sh  # 会重启一次应用，验证
 - **可执行位**：`cmd/*` 必须有 x 位，`build.sh` 每次都会补；在 Windows 上编辑后别指望它自己保留。
 - **版本号**：改 `manifest` 的 `version` 才叫新版本。同版本重装会被应用中心静默跳过。
 - **改脚本前先跑本地自测**：`bash fpk/selftest.sh`。Windows 上应为
-  **51 通过 / 25 跳过 / 0 失败**（22 项是权限位、`/proc`、进程组这类 Linux 专属断言，
-  另 3 项是软链/降权探测相关的跳过）；Linux 上应全绿（数量比 Windows 多 13 项 dsh 模式编排，
-  软链与 `runuser` 那几条也会真跑）。若在 Windows 上看到共享目录相关的失败，先确认是不是用了旧脚本。
+  **65 通过 / 32 跳过 / 0 失败**（跳过的是权限位、`/proc`、进程组这类 Linux 专属断言，
+  以及需要真实 dsh 运行时的软链/降权/dsh 编排段）；Linux 上应全绿
+  （Linux 专属跳过项会真跑，数量比 Windows 多十几项）。若在 Windows 上看到共享目录相关的失败，先确认是不是用了旧脚本。
 - **权限探测必须切身份**：`log_accessible_paths()` 里所有 `[ -r ]`/`[ -w ]` 都要走
   `probe_as_app`，别图省事直接判 —— 生命周期脚本以 root 跑，root 绕过 mode 位，
   「nobody:0000」的目录会被误判成「读写」，用户照着日志排错只会更迷糊（[ISSUES F25](docs/ISSUES.md)）。

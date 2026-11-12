@@ -6,7 +6,7 @@
 #   bash 02-smoke-dsh.sh                      # 自动选绑定地址、端口 3089
 #   BIND_IP=192.168.0.114 bash 02-smoke-dsh.sh
 #   NODE_BIN=/var/apps/nodejs_v24/target/bin/node bash 02-smoke-dsh.sh
-#   PKG=@deepseek-ai/dsh@0.2.1-rc.5 bash 02-smoke-dsh.sh
+#   PKG=@deepseek-ai/dsh@0.2.2-rc.1 bash 02-smoke-dsh.sh
 #   WORKDIR=/vol1/dsh-probe CLEAN=1 bash 02-smoke-dsh.sh
 #
 # 产出：<WORKDIR>/dsh-smoke-<时间>.md
@@ -25,7 +25,7 @@ PORT="${PORT:-3089}"
 CLEAN="${CLEAN:-0}"
 # 与 build.sh 保持一致：npm 的 latest 标签落后多个 RC（见 PLAN §3.2），
 # 这里若不钉版本，探针测的就是一个和包里不同的 dsh。
-PKG="${PKG:-@deepseek-ai/dsh@0.2.1-rc.5}"
+PKG="${PKG:-@deepseek-ai/dsh@0.2.2-rc.1}"
 NODE_FLOOR="24.9.0"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 REPORT="$WORKDIR/dsh-smoke-$STAMP.md"
@@ -166,7 +166,8 @@ if [ -z "$NODE_BIN" ]; then
   fi
 fi
 
-export PATH="$(dirname "$NODE_BIN"):$PATH"
+NODE_PARENT="$(dirname "$NODE_BIN")"
+export PATH="$NODE_PARENT:$PATH"
 NPM_BIN="$(dirname "$NODE_BIN")/npm"
 # fnOS 的 nodejs_* 应用不一定自带 npm；退回 PATH 里的 npm（它只是个 JS 脚本，会用我们的 node 跑）
 if [ ! -x "$NPM_BIN" ]; then NPM_BIN="$(command -v npm 2>/dev/null || true)"; fi

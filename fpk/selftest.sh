@@ -475,7 +475,7 @@ step "模拟卸载重装（@appdata / @appconf 被清空）"
 # 真机实测：fnOS 卸载会把 @appdata / @appconf / @apphome 连根删掉，
 # 只有 data-share 活着。这里删掉 var/ 与 etc/ 复现那一幕。
 echo marker >"$HOME_DIR/.keep-test"
-rm -rf "$ROOT/var" "$ROOT/etc"
+rm -rf "${ROOT:?}/var" "${ROOT:?}/etc"
 mkdir -p "$ROOT/var" "$ROOT/etc"
 # 第一次：带 Key 与自定义绑定装一遍（这两项会被写进共享目录里的副本）
 TEST_API_KEY="sk-selftest-1234" TEST_BIND="10.9.8.7" lc "$HERE/cmd/install_callback"
@@ -484,7 +484,7 @@ check "Key 已写入副本" "sk-selftest-1234" \
   "$(grep -E '^DSH_API_KEY=' "$HOME_DIR/settings.conf" 2>/dev/null | cut -d= -f2-)"
 
 # 第二次：完全空白安装（不带 Key、binding 留空 = 保留旧值）
-rm -rf "$ROOT/var" "$ROOT/etc"
+rm -rf "${ROOT:?}/var" "${ROOT:?}/etc"
 mkdir -p "$ROOT/var" "$ROOT/etc"
 TEST_API_KEY="" TEST_BIND="" lc "$HERE/cmd/install_callback"
 check "API Key 从副本恢复" "sk-selftest-1234" \

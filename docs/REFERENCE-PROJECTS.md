@@ -19,12 +19,13 @@
 | [lu-peifeng/fnos-deepseek-harness-manager](https://gitee.com/lu-peifeng/fnos-deepseek-harness-manager)（Gitee） | 未标注 / — | 0.1.0-rc.7（首次启动 `npm i -g` 现装） | **root**（`config/privilege`） | 管理页 + `/ds/*` 反代 | `127.0.0.1:{port}` |
 | [fnosp/fnos-dsh](https://github.com/fnosp/fnos-dsh) | Apache-2.0 / — | 未固定（monorepo 跟随） | — | 网关 + 插件生态 | — |
 
-我们自己（`dsh` 0.8.1）对照位：**非 root 专用用户 `dsh`**、入口 `type: url` 直连
+我们自己（`dsh` 0.9.2）对照位：**非 root 专用用户 `dsh`**、入口 `type: url` 直连
 `3080`、`launcher` 302 到 `3081`、其余本机地址由 `relay` 在 TCP 层接住、
-数据落 `@appshare/dsh/.dsh-home`（跨卸载存活）、单架构 `x86`、包内 1015MB。
+数据落 `@appshare/dsh/.dsh-home`（跨卸载存活）、单架构 `x86`、包内约 745MB（0.9.2 瘦身后）。
 
 **第一个结论**：能查到基线的四个项目**全部是 `0.1.x`**（最高的 `techysy` 也只到
-0.1.7-rc.2 线，`fnosp` 未固定版本）。我们钉的是 `0.2.1-rc.5`，中间隔着
+0.1.7-rc.2 线，`fnosp` 未固定版本）。我们钉的是 `0.2.2-rc.1`（初版分析时为
+`0.2.1-rc.5`），中间隔着
 「浏览器 token 鉴权」「目录选择器重写」「web-app 组合包拆分」几次改动。
 **他们代码里的运行时补丁，一半以上是在补我们已经没有的问题**。照抄会引入新风险，不是省事。
 
@@ -177,7 +178,7 @@ manifest.platform ≠ 期望值 → die（附「请在对应架构机器上各�
 | 只有 x86 | ARM 机型（部分 RK/Allwinner 设备）装不上 | 门禁已加，出包仍需在 ARM 机器上打 |
 | `allUsers: true` | 任何飞牛账号都能在桌面看到并打开（dsh 的 bash 工具以应用用户执行） | 社区两个项目都设 `false`。我们没改：它只影响图标可见性，挡不住直接访问端口，价值有限；要改是一行 |
 | 无热更新 | 升级要手动装 fpk | 不做：热更新需要 sudo 白名单，等于给应用一条提权通道 |
-| 包体 1015MB | 安装慢、占空间 | 有瘦身空间（见 HARNESS-FEATURES），但要重跑冒烟 |
+| 包体约 745MB / 5.4 万文件（0.9.2 瘦身后，fpk 约 216MB） | 安装慢、占空间 | 0.9.2 已适度瘦身（删 `*.map` 与测试/示例/文档，897M→745M）；再激进需去 bundled node（ISSUES D 档，决定不做） |
 
 ---
 

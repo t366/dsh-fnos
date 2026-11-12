@@ -60,7 +60,6 @@ DSH_HOME="$(dsh_home_for "$PKGVAR")"
 # dsh 的默认工作区固定在 <系统文档目录>/deepseek-harness/default-workspace（见 F22）。
 # 文档目录在 linux 上由 xdg-user-dir 读 $HOME/.config/user-dirs.dirs 得到。
 DOCS_FILE="$DSH_HOME/.config/user-dirs.dirs"
-DEFAULT_WS_REL="deepseek-harness/default-workspace"
 DSH_DEFAULT_WS=""
 
 # 组名不一定跟着 TRIM_* 一起传进来。DSH_HOME 已存在时以它的属组为准，
@@ -727,8 +726,6 @@ read_pidf() { # $1=pidfile
   [ "$pid" -gt 1 ] || return 1
   printf '%s %s\n' "$pid" "${pgid:-$pid}"
 }
-
-read_pid() { read_pidf "$PIDFILE"; }
 
 is_runningf() { # $1=pidfile
   local pid pgid pair cmd p seen=1
