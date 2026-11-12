@@ -167,20 +167,23 @@ try{const b=fs.readFileSync(process.argv[1]);
     else
       bad "缺少 npm" "pnpm 的 view/add 会落到系统 npm 10.9.3，与 node 24 不兼容（0.7.0 起应自带 runtime/node/bin/npm）"
     fi
-    # 0.8.1：把 dsh 自带的 Office 渲染引擎用起来（web 形态默认不挂 skill-office）。
-    # 判据是"三件套齐全"——资产目录、Kit CLI、自带 node 少一个 cmd/main 就会跳过。
+    # 0.9.3（dsh 0.2.2-rc.2）：Office 链路由 web profile 内置挂载（dsh-office-kit
+    # + skill-office），cmd/main 不再传 --patch。判据改为「技能资产 + 渲染引擎」：
+    #   · skill-office 的 assets 下应有 4 个技能目录（office/docx/pptx/xlsx）；
+    #   · libreoffice-kit-wasm 是 build.sh full 模式按主包版本补装的渲染引擎，
+    #     缺了 office-kit 启动不炸、渲染/导出 PDF/公式重算时才提示未安装。
     OA="$TARGET/runtime/app/node_modules/@deepseek-ai/dsh-skill-office/assets"
-    OKIT="$TARGET/runtime/app/node_modules/@deepseek-ai/libreoffice-kit/lib/cli.js"
+    OWAS="$TARGET/runtime/app/node_modules/@deepseek-ai/libreoffice-kit-wasm"
     if [ -d "$OA" ]; then
       NASSET="$(find "$OA" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
-      ok "Office 技能资产" "$NASSET 个技能目录"
+      ok "Office 技能资产" "$NASSET 个技能目录（rc.2 内置挂载）"
     else
-      warn "没有 Office 技能资产" "skill-office 未随包安装，cmd/main 会跳过 --patch（不影响启动）"
+      warn "没有 Office 技能资产" "skill-office 未随包安装（web profile 的 office 条目会落空）"
     fi
-    if [ -f "$OKIT" ]; then
-      ok "Office 渲染 Kit" "libreoffice-kit 已安装（Linux 走 wasm）"
+    if [ -d "$OWAS" ]; then
+      ok "Office 渲染引擎" "libreoffice-kit-wasm 已按主包版本补装（Linux 走 wasm）"
     else
-      warn "没有 Office 渲染 Kit" "渲染/重算/导出 PDF 不可用（作者类技能不受影响）"
+      warn "没有 Office 渲染引擎" "渲染/重算/导出 PDF 不可用（作者类技能 docx/pptx/xlsx 走 Python 不受影响）"
     fi
   elif [ -f "$TARGET/runtime/stub/server.mjs" ]; then
     warn "骨架包（stub）" "未捆绑 dsh，只验证安装链路"
@@ -363,16 +366,29 @@ else
        "要么这次启动发生在 0.6.7 之前，要么 log_accessible_paths 没被调用；重启一次再看"
 fi
 
-# Office 技能到底有没有挂上：cmd/main 每次启动都会写一行 office: enabled / skip（带原因）。
-# 只看包里有资产不够——补丁没传进去，用户依然看不到技能。
-if [ -f "$ROOT/var/info.log" ] && grep -q 'office: ' "$ROOT/var/info.log" 2>/dev/null; then
-  OFFLINE="$(grep 'office: ' "$ROOT/var/info.log" | tail -n1)"
-  case "$OFFLINE" in
-    *enabled*) ok "Office 技能已挂载" "$OFFLINE" ;;
-    *)         warn "Office 技能未挂载" "$OFFLINE（不影响启动，只是没有渲染/预览能力）" ;;
-  esac
+# Office 技能挂载（0.9.3 / dsh 0.2.2-rc.2 起）：web profile 内置 office-kit +
+# skill-office 条目，cmd/main 不再写 office: 日志行。改用「组合配置转储」验证：
+# --dump-config 的最终配置树里应有 office-kit 与 skill-office 两个条目
+# （跳转器/中继只在完整应用里存在，dump 检查仅在能拿到 node 时做）。
+DUMPED=""
+if [ -x "$TARGET/runtime/node/bin/node" ] && [ -f "$TARGET/runtime/app/node_modules/@deepseek-ai/dsh/package.json" ]; then
+  ENTRY="$("$TARGET/runtime/node/bin/node" -e 'let p;try{p=require(process.argv[1]).bin;p=typeof p==="string"?p:(p&&p.dsh)||Object.values(p)[0];}catch(e){};process.stdout.write(p||"")' \
+      "$TARGET/runtime/app/node_modules/@deepseek-ai/dsh/package.json" 2>/dev/null || true)"
+  if [ -n "$ENTRY" ] && [ -f "$TARGET/runtime/app/node_modules/@deepseek-ai/dsh/$ENTRY" ]; then
+    DUMPED="$("$TARGET/runtime/node/bin/node" "$TARGET/runtime/app/node_modules/@deepseek-ai/dsh/$ENTRY" \
+      --profile web --dump-config 2>/dev/null || true)"
+  fi
+fi
+if [ -n "$DUMPED" ]; then
+  NKIT="$(printf '%s\n' "$DUMPED" | grep -c 'dsh-office-kit' || true)"
+  NSK="$(printf '%s\n' "$DUMPED" | grep -c 'dsh-skill-office' || true)"
+  if [ "$NKIT" -ge 1 ] && [ "$NSK" -ge 1 ]; then
+    ok "Office 技能挂载（web profile 内置）" "office-kit 与 skill-office 均在最终配置中"
+  else
+    warn "Office 技能条目缺失" "dump-config 里 office-kit=$NKIT / skill-office=$NSK，web profile 未按预期挂载"
+  fi
 else
-  warn "日志里没有 office: 这一行" "可能是升级后没重启过，或包版本早于 0.8.1"
+  warn "跳过 Office 挂载检查" "拿不到 dsh 入口或 dump-config 没跑成（骨架包/节点缺失时属正常）"
 fi
 
 # 授权目录的浏览入口（F24）：dsh 的「选择工作区目录」只从 $HOME 起步，且把 home

@@ -23,14 +23,21 @@ cd "$HERE"
 MODE="${1:-skeleton}"
 # 钉版本，永不写 @latest：dsh 的 npm dist-tags 与 GitHub 发布不同步
 # （latest 曾落后三个 RC），不写版本号装到的是旧版，见 PLAN §3.2。
-# 0.7.1 起跟到 rc.5：rc.4 是「无变更重发」（内容与 rc.3 逐字节相同），
-# rc.5 的改动是对话里思考内容的展示优化（纯前端）。rc.3→rc.5 依赖集完全一致
-# （86 个包，只有版本号变），没有新增原生件或新引擎要求。
-# 0.9.0 起跟到 0.2.2-rc.1：0.2.2 线首个 RC，npm 实测 latest = next = 0.2.2-rc.1
-# （alpha = 0.2.2-alpha.3）。自带 skill-office，--patch 挂载链路依赖仍在；
-# 发布包声明 engines.node >= 24.9.0（0.2.1-rc.5 没有，门槛检查从此处起真正生效）。
+# 0.9.2 起跟到 0.2.2-rc.2（2026-11-12 发布，GitHub release dsh-v0.2.2-rc.2）。
+# npm 上 latest 仍是 rc.1、next = rc.2；按惯例跟 rc 线（0.7.1 起即如此）。
+# rc.2 的兼容要点（详见 DEVLOG 38.1）：
+#   · CLI 契约不变（--profile/--host/--port/--trusted-host/--patch、DSH_HOME、
+#     0.0.0.0 拒绝），bin/profile-boot 逻辑等价，engines.node 仍 >= 24.9.0；
+#   · Office 链路重构：web profile 内置挂载 dsh-office-kit + skill-office
+#     （4 个技能，配置面只剩 assetRoot/pythonEnvironment），我们 0.9.2 前的
+#     --patch office 挂载整个退役；渲染引擎 libreoffice-kit-wasm 不再随装
+#     （0.1.x 经 optionalDependencies 自动进树，0.2.3 起独立包），full 模式
+#     在下方按主包版本补装；
+#   · dsh-experimental-agent-team-profile 进入 RETIRED_BUNDLES，app-boot 会
+#     自动从旧 profile 移除，无需迁移；cua-bundle 是可选包（纯 JS）默认不激活；
+#   · npm 包开始随附 src/ + docs/（tarball 25KB → 2.2MB），瘦身列表相应处理。
 # 已知事故：桌面端 rc.5→rc.1 有插件配置丢失案例，升级前快照（0.7.2 起）兜底。
-DSH_VERSION="${DSH_VERSION:-0.2.2-rc.1}"
+DSH_VERSION="${DSH_VERSION:-0.2.2-rc.2}"
 # dsh 自己不实现包管理：插件安装/查询全部转发给 pnpm（`pnpm view`、`pnpm add`），
 # 而且只认 PATH 上的裸命令 "pnpm" → 不带 pnpm 时 Web 界面报 `spawn pnpm ENOENT`。
 # 钉 10.x 的理由：dsh 的引导文案让用户改 pnpm-workspace.yaml 里的 allowBuilds，
@@ -59,7 +66,7 @@ find cmd -type f -exec sed -i 's/\r$//' {} + 2>/dev/null || true
 for f in app/ui/config wizard/* manifest; do
   [ -f "$f" ] && sed -i 's/\r$//' "$f" 2>/dev/null || true
 done
-for f in app/runtime/stub/server.mjs app/runtime/launcher/server.mjs app/runtime/relay/server.mjs app/runtime/profile/office.patch.yml; do
+for f in app/runtime/stub/server.mjs app/runtime/launcher/server.mjs app/runtime/relay/server.mjs; do
   [ -f "$f" ] && sed -i 's/\r$//' "$f" 2>/dev/null || true
 done
 
@@ -377,41 +384,45 @@ if [ "$MODE" = "full" ]; then
     [ "$GOT" = "$DSH_VERSION" ] || die "版本不符：请求 $DSH_VERSION，实际装到 ${GOT:-未知}"
     say "dsh 版本校验通过：$GOT"
 
-    # ---- Office 补丁的静态校验（用 dsh 自己带的 yaml 解析器，不引入新依赖）----
-    # 这份补丁只在命令行上生效一次，写错了会让 dsh 在解析阶段直接退出——
-    # 那意味着"应用装好了但打不开"。所以在打包期就用真实的解析器过一遍，
-    # 校验不过就别出包，而不是等用户装机后发现起不来。
-    "$NODE_SRC/bin/node" -e '
-      const { createRequire } = require("node:module");
-      const [patchFile, appDir0] = process.argv.slice(1);
-      const appDir = require("node:path").resolve(appDir0);
-      const req = createRequire(appDir + "/package.json");
-      let YAML;
-      try { YAML = req("yaml"); } catch { console.log("SKIP: 安装树里没有 yaml 解析器"); process.exit(0); }
-      const text = require("node:fs").readFileSync(patchFile, "utf8");
-      const doc = YAML.parse(text, { customTags: [{ tag: "tag:yaml.org,2002:js", resolve: v => v }] });
-      const fail = m => { console.error("FAIL: " + m); process.exit(1); };
-      if (!Array.isArray(doc) || doc.length === 0) fail("顶层必须是 patch 数组");
-      const row = (doc[0].insert || [])[0];
-      if (!row) fail("缺少 insert 行");
-      if (row.id !== "skill-office") fail("行 id 应为 skill-office，实际 " + JSON.stringify(row.id));
-      if (row.name !== "@deepseek-ai/dsh-skill-office") fail("行 name 不对");
-      for (const k of ["assetRoot", "cli", "node"]) {
-        if (!row.config || !(k in row.config)) fail("config 缺 " + k);
-      }
-      console.log("OK: Office 补丁可解析");
-    ' ../profile/office.patch.yml "$PWD" || die "Office 补丁校验失败（见上）"
+    # ---- LibreOffice 渲染引擎（office-kit 的 WASM 本体，约 150MB）----
+    # 0.2.2-rc.2 起 Office 链路重构：web profile 内置挂载 dsh-office-kit +
+    # skill-office，配置零注入，但渲染引擎 libreoffice-kit-wasm 不再随装——
+    # 0.1.x 时代它挂在 libreoffice-kit 的 optionalDependencies 里自动进树，
+    # 0.2.3 起是独立包、依赖树里没有任何引用方；不补装的话 office-kit 启动
+    # 不炸，转换/渲染/公式重算时才报「未提供 LibreOffice Kit」（KIT_INSTALL_HINT）。
+    # 版本必须与主包一致：office-kit 用 Kit 自己的解析器按主包安装位置找 wasm，
+    # 所以从安装树回读 libreoffice-kit 的 version，再装同版本的 wasm。
+    # DSH_OFFICE_WASM=0 可跳过：Office 作者类技能（docx/pptx/xlsx，走 Python）
+    # 不受影响，只有渲染预览/导出 PDF/公式重算不可用。
+    if [ "${DSH_OFFICE_WASM:-1}" = "1" ]; then
+      LOK="node_modules/@deepseek-ai/libreoffice-kit/package.json"
+      [ -f "$LOK" ] || die "安装树里没有 libreoffice-kit——dsh $DSH_VERSION 的依赖结构变了？核对 DEVLOG 38.1 后再处理"
+      LOKV="$("$NODE_SRC/bin/node" -p "JSON.parse(require('fs').readFileSync('$LOK','utf8')).version" 2>/dev/null || true)"
+      case "$LOKV" in ''|*[!0-9.]*) die "读不到 libreoffice-kit 的版本号（$LOK）" ;; esac
+      say "安装 @deepseek-ai/libreoffice-kit-wasm@$LOKV ..."
+      "$NODE_SRC/bin/npm" install --omit=dev --no-audit --no-fund --no-save \
+        --prefix "$PWD" "@deepseek-ai/libreoffice-kit-wasm@$LOKV" \
+        >/tmp/dsh-npm-wasm.log 2>&1 || { tail -n 30 /tmp/dsh-npm-wasm.log; die "libreoffice-kit-wasm 安装失败"; }
+      [ -d "node_modules/@deepseek-ai/libreoffice-kit-wasm" ] || die "wasm 安装后目录缺失，见 /tmp/dsh-npm-wasm.log"
+      say "OK: libreoffice-kit-wasm@$LOKV 已就位"
+    else
+      say "已按 DSH_OFFICE_WASM=0 跳过 Office 渲染引擎（渲染/导出 PDF/重算将不可用）"
+    fi
   )
 
   # ---- 运行时瘦身：删 node_modules 里运行时永不读的文件（0.9.2 性能优化）----
   # 只删两类，均有实证依据：
   #   · *.map 源映射——只有 --enable-source-maps 时才读，NAS 上没人开；
-  #   · 测试/示例/文档目录——test(s)/__tests__/example(s)/docs/.github。
-  # 明确不删的（都论证过，见 DEVLOG 37.9）：
+  #   · 测试/示例/文档目录——test(s)/__tests__/example(s)/docs/.github
+  #     （0.2.2-rc.2 起 npm 包随附 docs/ 升级指南与 src/ 源码，docs 在这里
+  #     顺路清掉；src/ 各包几 MB 且不能排除个别包从 src 引用，保留不动）。
+  # 明确不删的（都论证过，见 DEVLOG 37.9 / 38.1）：
   #   · *.md——技能体系是 Markdown 驱动的，assets/*/SKILL.md 是运行时数据；
-  #   · @deepseek-ai/dsh-experimental-*——0.2.2 的新能力（worktree/agent-team/
+  #   · @deepseek-ai/dsh-experimental-*——experimental 的新能力（worktree/
   #     voice-input/inspector）都在里面，懒加载，删了 UI 一开就断；
-  #   · libreoffice-kit-wasm 下的一切——Office 三技能的本体（146M）。
+  #     （agent-team-profile 已在 rc.2 被 dsh 退役，树上自然没有）
+  #   · libreoffice-kit-wasm 下的一切——Office 渲染引擎本体（约 150M，
+  #     rc.2 起由上面一段显式安装，run 期 office-kit 按主包位置解析它）。
   _R=app/runtime/app/node_modules
   _before="$(du -sm "$_R" 2>/dev/null | cut -f1)"
   find "$_R" -type f -name '*.map' -delete 2>/dev/null || true
@@ -535,11 +546,6 @@ fi
 for f in app/runtime/launcher/server.mjs app/runtime/relay/server.mjs; do
   [ -f "$f" ] || die "缺少入口组件：$f"
 done
-
-# Office 补丁只在 dsh 模式用得上（骨架包里没有 dsh），所以只在 full 模式下强制。
-if [ "$MODE" = "full" ]; then
-  [ -f app/runtime/profile/office.patch.yml ] || die "缺少 Office 补丁：app/runtime/profile/office.patch.yml"
-fi
 
 # ---------------------------------------------------------------- 5. 体积统计
 step "包内统计（安装体验按文件数计费）"

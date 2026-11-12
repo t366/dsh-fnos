@@ -19,12 +19,12 @@
 | [lu-peifeng/fnos-deepseek-harness-manager](https://gitee.com/lu-peifeng/fnos-deepseek-harness-manager)（Gitee） | 未标注 / — | 0.1.0-rc.7（首次启动 `npm i -g` 现装） | **root**（`config/privilege`） | 管理页 + `/ds/*` 反代 | `127.0.0.1:{port}` |
 | [fnosp/fnos-dsh](https://github.com/fnosp/fnos-dsh) | Apache-2.0 / — | 未固定（monorepo 跟随） | — | 网关 + 插件生态 | — |
 
-我们自己（`dsh` 0.9.2）对照位：**非 root 专用用户 `dsh`**、入口 `type: url` 直连
+我们自己（`dsh` 0.9.3）对照位：**非 root 专用用户 `dsh`**、入口 `type: url` 直连
 `3080`、`launcher` 302 到 `3081`、其余本机地址由 `relay` 在 TCP 层接住、
 数据落 `@appshare/dsh/.dsh-home`（跨卸载存活）、单架构 `x86`、包内约 745MB（0.9.2 瘦身后）。
 
 **第一个结论**：能查到基线的四个项目**全部是 `0.1.x`**（最高的 `techysy` 也只到
-0.1.7-rc.2 线，`fnosp` 未固定版本）。我们钉的是 `0.2.2-rc.1`（初版分析时为
+0.1.7-rc.2 线，`fnosp` 未固定版本）。我们钉的是 `0.2.2-rc.2`（初版分析时为
 `0.2.1-rc.5`），中间隔着
 「浏览器 token 鉴权」「目录选择器重写」「web-app 组合包拆分」几次改动。
 **他们代码里的运行时补丁，一半以上是在补我们已经没有的问题**。照抄会引入新风险，不是省事。

@@ -1,7 +1,7 @@
 # DeepSeek Harness 功能清单（以及对飞牛的可移植性）
 
 状态：**v1.0（2026-11-02）**　底本：`deepseek-harness` master `ce7073d`（`0.2.2-alpha.2`）
-本包实际运行：`@deepseek-ai/dsh@0.2.2-rc.1`（web 形态，0.9.0 起）
+本包实际运行：`@deepseek-ai/dsh@0.2.2-rc.2`（web 形态，0.9.3 起；0.9.0–0.9.2 为 rc.1）
 
 > 配套文档：[HARNESS-ARCHITECTURE.md](HARNESS-ARCHITECTURE.md)（它讲"为什么只能这么封装"），
 > 本文讲"**功能到底有哪些、在飞牛上哪一档**"。
@@ -19,8 +19,9 @@ dsh 的功能不是"有/没有"，而是三层：
 | **按需下载** | 打开时才去 npm 装 | Claude Code / Codex 子智能体、Computer use |
 
 飞牛上"功能不可用"的原因，九成不是上游缺能力，而是**我们的形态选的是 `web`**，
-以及**宿主缺少某个外部件**（Python 库、浏览器、外部服务）。所以适配的正路是
-「用 `--patch` 插一行」，不是改 dsh 源码。
+以及**宿主缺少某个外部件**（Python 库、浏览器、外部服务）。0.8.1 时适配的正路是
+「用 `--patch` 插一行」；0.9.3 起上游把 Office 挂载收编进 web profile（§1、§4），
+这条手法随之退役——原则不变：**不改 dsh 源码**。
 
 ---
 
@@ -36,13 +37,19 @@ OPTIONAL_BUNDLES  = [ /* 16 个：会话搜索、ralph、终端、徽章技能�
                           语音输入、思维链翻译、自动评审、检查器、liveshare、
                           插件市场、worktree、forge、个性化推荐、… */ ]
 ON_DEMAND_BUNDLES = [ subagent-claude-code, subagent-codex, cua-bundle ]
+/* rc.2 起：cua-bundle 改列 OPTIONAL（纯 JS，默认不激活，web 模板不装）；
+   dsh-experimental-agent-team-profile / schedule-bundle 进 RETIRED_BUNDLES，
+   app-boot 会自动从旧 profile 移除 */
 ```
 
-**关键事实：`base` 里没有 `skill-office`。** 它只出现在
-`packages/bundle/sdk-app/cordis.patch.yml`。也就是说 web 形态天然没有 Office 技能，
-而它的渲染引擎 `@deepseek-ai/libreoffice-kit` 是 skill-office 的**硬依赖**，
-会随 dsh 装进 `node_modules`（Linux 无原生包，走 `libreoffice-kit-wasm`，解包约 152MB）。
-**这 152MB 一直在我们包里，但从没被挂载过。**（0.8.1 已修，见 §4）
+**关键事实（0.2.2-alpha.2 底本）：`base` 里没有 `skill-office`**，它只出现在
+`packages/bundle/sdk-app/cordis.patch.yml`——web 形态天然没有 Office 技能。
+**0.2.2-rc.2 翻案**：web profile 的 `cordis.patch.yml` 内置挂载 `dsh-office-kit` +
+`skill-office`（4 技能：office 总纲/docx/pptx/xlsx，原 office-render/recalculate/
+export-pdf 三个渲染类子技能收编进 office-kit），本包 0.8.1 的 `--patch` 覆盖层
+随之退役（§4）。渲染引擎 `@deepseek-ai/libreoffice-kit-wasm`（约 152MB）同时改为
+**独立包、无人自动安装**，`build.sh` full 模式按 libreoffice-kit 主包版本补装
+（`DSH_OFFICE_WASM=0` 可跳过）。
 
 ---
 
@@ -65,14 +72,14 @@ ON_DEMAND_BUNDLES = [ subagent-claude-code, subagent-codex, cua-bundle ]
 | 模型与凭据 | `llm-deepseek-*`、`credentials-local` | ✅ | API key 或账号登录 |
 | Web UI / 多端入口 | `dsh-web-app` | ✅ | 令牌 + cookie + 多网卡 relay（0.8.0） |
 
-### B. 本次新开（0.8.1）
+### B. 本次新开（0.8.1 起；0.9.3 起由上游内置挂载）
 
 | 能力 | 提供者 | 状态 | 说明 |
 |---|---|---|---|
-| 文档渲染预览 | `skill-office/office-render` | 🟡 | 走 wasm；**依赖宿主字体**，见 §3.3 |
-| 公式重算 | `skill-office/office-recalculate` | ✅ | 只重算不自绘，不受字体影响 |
-| 导出 PDF | `skill-office/office-export-pdf` | 🟡 | 不需要系统 LibreOffice，但**中文排版同样依赖字体**，见 §3.3 |
-| 文档作者（docx/pptx/xlsx） | `skill-office/office-*` | 🟡 | 需要 Python 库；见 §3.1 |
+| 文档渲染预览 | `dsh-office-kit`（wasm） | 🟡 | 走 wasm；**依赖宿主字体**，见 §3.3。原 `office-render` 子技能 rc.2 起收编进 office-kit |
+| 公式重算 | `dsh-office-kit` | ✅ | 只重算不自绘，不受字体影响。原 `office-recalculate` 同上 |
+| 导出 PDF | `dsh-office-kit` | 🟡 | 不需要系统 LibreOffice，但**中文排版同样依赖字体**，见 §3.3。原 `office-export-pdf` 同上 |
+| 文档作者（docx/pptx/xlsx） | `skill-office/office-{docx,pptx,xlsx}` | 🟡 | 需要 Python 库；见 §3.1 |
 
 ### C. 需要宿主条件的
 
@@ -94,7 +101,7 @@ ON_DEMAND_BUNDLES = [ subagent-claude-code, subagent-codex, cua-bundle ]
 | 思维链翻译 `cot-translation` | ⬜ | 纯 LLM |
 | 自动评审 `auto-review` | ⬜ | 纯 LLM |
 | 会话标题（LLM） | ⬜ | 纯 LLM |
-| Agent 团队 `agent-team-profile` | ⬜ | 进程内 |
+| Agent 团队 `agent-team-profile` | ❌ | **rc.2 起上游退役**（进 RETIRED_BUNDLES，app-boot 自动从旧 profile 移除；0.9.0 changelog 的「实验性团队」不可再开） |
 | 检查器 `inspector-profile` | ⬜ | 开发向 |
 | worktree `tool-worktree` | ⬜ | 需要宿主 `git` |
 | Forge（Git 面板） | ⬜ | 需要宿主 `git ≥ 2.31` 才有"禁用过滤器"的行为 |
@@ -105,7 +112,7 @@ ON_DEMAND_BUNDLES = [ subagent-claude-code, subagent-codex, cua-bundle ]
 
 | 能力 | 原因 |
 |---|---|
-| **Computer use** | 目录里 `platforms: ['darwin']`，只支持 macOS |
+| **Computer use** | `platforms: ['darwin']` 只支持 macOS（rc.2 起 cua-bundle 列 OPTIONAL、web 模板不装，结论不变） |
 | **Liveshare（会话共享）** | 需要单独部署的 Liveshare 服务端 + OAuth；上游文档明确"默认 Web profile 排除它" |
 | **browser-use（浏览器操作）** | 上游没有任何 bundle 挂它——它是"部署方自己接一个浏览器 provider"的插槽，我们没有浏览器 |
 | **Claude Code / Codex 子智能体** | 按需安装的只是"适配层"，真正要宿主已有对应 CLI；飞牛上没有 |
@@ -167,19 +174,24 @@ Schedule 是**进程内**实现（Host 自己的 timer），不是 cron。飞牛
 
 ---
 
-## 4. 本轮的适配（0.8.1）
+## 4. 本轮的适配（0.8.1 引入；0.9.3 起退役）
+
+> **0.9.3 注**：dsh 0.2.2-rc.2 把 Office 挂载收编进 web profile 后，下表 0.8.1 的
+> 补丁链路全部拆除——补丁文件、`office_patch()`、打包期校验与 `probe/05` 的日志检查
+> 都已移除，渲染引擎改由 `build.sh` 补装。保留本节作为历史决策记录。
 
 | 位置 | 改动 | 作用 |
 |---|---|---|
-| `fpk/app/runtime/profile/office.patch.yml` | 新增：`- insert:` 一行挂 `skill-office` | 让 web 形态拥有 Office 技能 |
-| `fpk/cmd/main` | `office_patch()`：三条路径逐个验存在才传 `--patch` | **失败即降级**，绝不因增强功能拖垮启动 |
-| `fpk/build.sh` | 用 dsh 自带的 `yaml` 解析器校验补丁结构；full 模式强制文件存在 | 写错就不出包，而不是装机后打不开 |
-| `fpk/probe/05-verify-fpk.sh` | 查资产/Kit 是否存在；查日志里 `office: enabled` | 装机即知"到底挂上没有" |
+| ~~`fpk/app/runtime/profile/office.patch.yml`~~ | （0.8.1）`- insert:` 一行挂 `skill-office`；**0.9.3 整个删除** | 让 web 形态拥有 Office 技能 |
+| ~~`fpk/cmd/main` 的 `office_patch()`~~ | （0.8.1）三条路径逐个验存在才传 `--patch`；**0.9.3 删除** | **失败即降级**，绝不因增强功能拖垮启动 |
+| ~~`fpk/build.sh` 的补丁校验~~ | （0.8.1）yaml 解析器校验补丁结构、full 强制文件存在；**0.9.3 替换为 wasm 补装块**（按 libreoffice-kit 主包版本装 `libreoffice-kit-wasm`，`DSH_OFFICE_WASM=0` 可跳过） | 写错就不出包 → 引擎不缺席 |
+| `fpk/probe/05-verify-fpk.sh` | （0.8.1）查日志 `office: enabled`；**0.9.3 改查技能资产 + `--dump-config` 里的 office-kit/skill-office 挂载** | 装机即知"到底挂上没有" |
 | `fpk/probe/01-preflight.sh` | 报告 python3、Office 三库、**中文字体** | 为 §3.1 / §3.3 的决策收集事实 |
 
 **为什么不直接改 `profiles/web/cordis.patch.yml`（用户的补丁层）**：
 那是用户自己的文件，升级时不该被我们覆盖，也不该塞进用户看不见的东西。
 `--patch` 覆盖层是命令行参数，优先级最高、随进程生灭、删掉即恢复原样。
+（0.9.3 起这个问题不复存在：上游自己在 web profile 里挂载，我们两样都不用碰。）
 
 ---
 

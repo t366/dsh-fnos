@@ -47,10 +47,6 @@ PKGETC="${TRIM_PKGETC:-$SELF_DIR/../etc}"
 
 RUNTIME="$APPDEST/runtime"
 
-# 让 Web 形态带上 Office 技能的可选覆盖层（详见该文件里的说明）。
-# 只在运行期确认三个路径都存在时才传给 dsh，否则完全不用它。
-OFFICE_PATCH="$RUNTIME/profile/office.patch.yml"
-
 # dsh-home 放在共享目录里，卸载重装才不丢会话与凭据（实测 @appdata 会被连根删掉）。
 # 推导只在 cmd/lib-home 里留一份：以前 main 与 install_callback 各写一遍，
 # 升级链路又各自硬编码旧路径，结果快照与凭据检查全在看一个不存在的目录。
@@ -308,29 +304,11 @@ detect_mode() {
   fi
 }
 
-# Office 技能能不能挂载：三个路径必须同时存在。
-# 这里刻意"宁可不挂也不挂错"——skill-office 在收到不合法的 assetRoot/cli 时
-# 会让插件注册失败，而失败的 fiber 会拖垮整个启动。也就是说：多挂一次导致
-# 起不来，比少挂一次（用户看到"没有 Office 技能"）严重得多。
-office_patch() {
-  local assets cli
-  [ -f "$OFFICE_PATCH" ] || { log "office: skip（补丁文件缺失 $OFFICE_PATCH）"; return 1; }
-  assets="$RUNTIME/app/node_modules/@deepseek-ai/dsh-skill-office/assets"
-  [ -d "$assets" ] || { log "office: skip（技能资产缺失 $assets）"; return 1; }
-  # 不写死 lib/cli.js：Kit 的子路径可能变，交给 node 的解析器按安装树找。
-  cli="$("$NODE_BIN" -e '
-    const { createRequire } = require("node:module");
-    const { dirname, join } = require("node:path");
-    try {
-      const req = createRequire(process.argv[1] + "/package.json");
-      process.stdout.write(join(dirname(req.resolve("@deepseek-ai/libreoffice-kit/package.json")), "lib", "cli.js"));
-    } catch (e) { process.stdout.write(""); }
-  ' "$RUNTIME/app" 2>/dev/null)"
-  [ -n "$cli" ] && [ -f "$cli" ] || { log "office: skip（找不到 LibreOffice Kit 的 CLI）"; return 1; }
-  export DSH_OFFICE_ASSETS="$assets" DSH_OFFICE_CLI="$cli" DSH_OFFICE_NODE="$NODE_BIN"
-  log "office: enabled assets=$assets cli=$cli"
-  return 0
-}
+# Office 技能（0.2.2-rc.2 起）：web profile 在自己的 cordis.patch.yml 里内置挂载
+# dsh-office-kit + skill-office，无需（也不应再传）--patch 覆盖——skill-office 的
+# 配置面收窄为 {assetRoot, pythonEnvironment}，旧补丁里的 cli/node 字段不再合法。
+# 渲染/转换引擎 libreoffice-kit-wasm 由 build.sh 在打包期与 libreoffice-kit 主包
+# 对版本安装；缺引擎时 office-kit 启动不炸，只在转换时提示安装（KIT_INSTALL_HINT）。
 
 resolve_workspace() {
   local p first
@@ -1055,17 +1033,16 @@ do_start() {
   log "start: cwd=$workdir node=$NODE_BIN bind=$bind dsh_port=$dsh_port home=$DSH_HOME entry=${DSH_ENTRY:-auto} relay=${relay_ips[*]:-none}"
 
   local entry
-  local -a cmd trusted=() patchargs=()
+  local -a cmd trusted=()
   if [ "$MODE" = "dsh" ]; then
     entry="$(find_dsh_entry)" || die "运行时损坏：找不到 dsh 的入口文件。"
     # 每个被 relay 接住的地址都要进 trustedHosts：Host 栅栏只认 loopback、
     # 绑定 IP、以及 --trusted-host 列出的 authority（见 HARNESS-ARCHITECTURE §5.3）。
     # 取值必须是「裸 authority」——带路径会让插件 load 失败，进程秒退。
     for _ip in "${relay_ips[@]}"; do trusted+=(--trusted-host "$_ip:$dsh_port"); done
-    # Office 技能是可选增强：office_patch 自己会把三条路径逐个验过，
-    # 任一不满足就返回 1，此时命令行与 0.8.0 完全一致（不传 --patch）。
-    if office_patch; then patchargs=(--patch "$OFFICE_PATCH"); fi
-    cmd=("$entry" --profile web "${patchargs[@]}" --host "$bind" --port "$dsh_port" --no-open "${trusted[@]}")
+    # Office 技能自 0.2.2-rc.2 起由 web profile 内置挂载（dsh-office-kit +
+    # skill-office），不再用 --patch 覆盖，见上方 office 注释。
+    cmd=("$entry" --profile web --host "$bind" --port "$dsh_port" --no-open "${trusted[@]}")
     export DSH_HOME
     # dsh 会往 HOME 下写缓存/凭据，不设就可能落到 /root 或应用用户的默认家目录（不可写）
     export HOME="$DSH_HOME"

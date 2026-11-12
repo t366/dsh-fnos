@@ -365,19 +365,19 @@ error="10237:fork/exec /tmp/appcenter.pack./cmd/install_init: permission denied"
 - 原生件核对：`node-pty`、`@vscode/ripgrep`、`@deepseek-ai/node-addon-system` 必须是对应架构的 Linux 产物。
 - 体积治理见 §6.1（这是 v1 的主要工作量）。
 
-### 3.2 运行时版本钉定（2026-11-01 复核；2026-11-07 跟到 0.2.2-rc.1）
+### 3.2 运行时版本钉定（2026-11-01 复核；11-07 跟到 0.2.2-rc.1；11-12 跟到 0.2.2-rc.2）
 
 dsh 的 npm dist-tags 与 GitHub 发布**不同步**，不写版本号直接装会拿到旧版：
 
 | 来源 | 版本 | 时间 |
 |---|---|---|
-| npm `latest` / `next` | `0.2.2-rc.1`（0.9.0 起钉这个） | 11-04 |
-| npm `alpha` | `0.2.2-alpha.3` | 11-03 |
-| GitHub 最新 release | `v0.2.2-rc.1` | 11-04 |
+| npm `latest` | `0.2.2-rc.1`（11-12 核查仍指 rc.1，**落后**） | 11-12 |
+| npm `next` | `0.2.2-rc.2`（0.9.3 起钉这个） | 11-12 |
+| GitHub 最新 release | `dsh-v0.2.2-rc.2` | 11-12 |
 | 官方桌面版 | `0.2.1-rc.3` | — |
 
-**结论（11-07 更新）：钉 `0.2.2-rc.1`。** 此前（0.7.1–0.8.1）钉 `0.2.1-rc.5`，
-依据如下，历史保留：
+**结论（11-12 更新）：钉 `0.2.2-rc.2`**（11-07 曾钉 rc.1；0.7.1–0.8.1 钉
+`0.2.1-rc.5`）。依据如下，历史保留：
 
 - 必须显式写版本，不允许 `@latest` 或 `^`：`latest` 长期落后于仓库，最新一次核查时
   `latest` 还停在 rc.2，直接装会拿到旧版。
@@ -395,8 +395,16 @@ dsh 的 npm dist-tags 与 GitHub 发布**不同步**，不写版本号直接装�
 `skill-office` 仍随包发布，`--patch` 链路不变；风险是上游有插件配置丢失案例，
 由升级前快照（0.7.2 起）兜底。
 
-`build.sh` 里 `DSH_VERSION` 默认值即 `0.2.2-rc.1`，安装后**回读实际版本**校验（npm 的
-resolved 版本与请求不一致时直接失败，避免打出一个"看起来是 rc.1 实际是别的"的包）。
+**11-12 跟到 rc.2 的依据**：npm `latest` 仍停在 rc.1，但 `next` 与 GitHub 最新
+release 均已是 rc.2（2026-11-12 发布）；按「跟 rc 线」惯例选 rc.2。本次上游重构
+Office 链路（web profile 内置挂载 office-kit + skill-office，`--patch` 覆盖层退役、
+渲染引擎 `libreoffice-kit-wasm` 改独立包），是 0.2.2 线第一次动到封装契约的变更，
+适配与取证见 [HARNESS-ARCHITECTURE §11.3.2](docs/HARNESS-ARCHITECTURE.md) 与
+DEVLOG 38.1；`RETIRED_BUNDLES` 自动移除 experimental-agent-team-profile /
+schedule-bundle，老用户零手工迁移。风险兜底不变（升级前快照）。
+
+`build.sh` 里 `DSH_VERSION` 默认值即 `0.2.2-rc.2`，安装后**回读实际版本**校验（npm 的
+resolved 版本与请求不一致时直接失败，避免打出一个"看起来是 rc.2 实际是别的"的包）。
 未来升级：官方发新 release → 改这一处默认值 → 重打包，不做自动跟随。升级时先核对两件事：
 **依赖集有没有新增原生件**、**`cordis.patch.yml` 那套插件接口有没有变**（后者改了我们那份
 DDG 搜索插件要跟着改）。

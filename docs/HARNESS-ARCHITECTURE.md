@@ -2,7 +2,7 @@
 
 状态：**分析稿 v1.1（2026-11-02）**　底本：`/e/Project2/deepseek-harness` master HEAD `ce7073d`
 （`0.2.2-alpha.2`，2026-10-30）；初版基于 `0.2.1-rc.3`，两者差异见 §11。
-本包实际钉的 npm 版本是 `0.2.2-rc.1`（2026-11-07 起，理由见 §11.3 与 §11.3.1）。
+本包实际钉的 npm 版本是 `0.2.2-rc.2`（2026-11-12 起，理由见 §11.3 与 §11.3.2）。
 
 > 这份文档回答两个问题：**dsh 是怎么长成这样的**，以及**它的哪些设计直接决定了
 > fpk 封装只能这么做、不能那么做**。第二列比第一列更重要——适配层每一条"看着奇怪"
@@ -398,6 +398,28 @@ npm dist-tags 本次实测：`latest = next = 0.2.1-rc.5`，`alpha = 0.2.2-alpha
 - 上游有桌面端 rc.5→rc.1 插件配置丢失案例（34→2 条）；本包 0.7.2 起升级前
   自动快照 `.dsh-home` 到 `@appshare/dsh/backups`，回滚按 RUNBOOK 走。
 - 升级后按上面三件事重验 + selftest 全量。
+
+### 11.3.2 后续（2026-11-12：跟到 `0.2.2-rc.2`，包 0.9.3）
+
+npm 上 `latest = 0.2.2-rc.1`、`next = 0.2.2-rc.2`（2026-11-12 发布），GitHub 最新
+release 是 `dsh-v0.2.2-rc.2`。按本项目惯例跟 rc 线，`DSH_VERSION` 钉到 rc.2。
+本次上游**重构了 Office 链路**，是 0.2.2 线第一次真正动到封装契约的变更：
+
+| 变更 | 事实（tarball 取证） | 对封装的影响 |
+|---|---|---|
+| Office 挂载内置化 | web profile 的 `cordis.patch.yml` 内置挂载 `dsh-office-kit` + `skill-office`（原文 "Every profile uses the packaged Office skills"） | 0.8.1 的 `--patch` 覆盖层整个退役：`office.patch.yml`、`cmd/main` 的 `office_patch()` 与打包期补丁校验全部删除 |
+| skill-office 收窄 | 技能 7→4（删 office-render/recalculate/export-pdf），Config schema 收窄为 `{assetRoot, pythonEnvironment}` | 旧补丁里的 `cli`/`node` 字段不再合法——就算留着补丁也会让插件注册失败拖垮启动 |
+| 渲染引擎独立 | `libreoffice-kit-wasm`（约 152MB）成为独立包且**无人自动安装**（rc.1 时代经 libreoffice-kit 0.1.5 的 optionalDependencies 随装） | `build.sh` full 模式按 libreoffice-kit 主包版本回读补装；`DSH_OFFICE_WASM=0` 可跳过（跳过后渲染/导出 PDF/重算不可用，docx/pptx/xlsx 作者技能走 Python 不受影响） |
+| 引擎定位方式 | office-kit 用 `createRequire(kitEntry).resolve("@deepseek-ai/libreoffice-kit-wasm/package.json")` 定位引擎 | 平铺 node_modules 里补装即可被发现，无需额外配置 |
+| bundle 退役 | `RETIRED_BUNDLES` 含 experimental-agent-team-profile / schedule-bundle，app-boot 自动从旧 profile 移除 | 老用户升级零手工迁移；cua-bundle（macOS Computer Use，纯 JS）为 OPTIONAL，web 模板不激活 |
+
+**不变项**（逐项核验）：CLI 契约（`--profile/--host/--port/--trusted-host/--patch/--dump-config`、
+`DSH_HOME`、0.0.0.0 拒绝）、`engines.node >= 24.9.0`、web 模板 `[dsh-base, dsh-web-app]`、
+`trustedHosts` 机制（多网卡中继不受影响）、profile-boot 逻辑等价（`git diff --no-index` 证明）。
+npm 包从 25KB 涨到 2.2MB（开始随附 `docs/` 与 `src/`），瘦身清单的 docs prune 顺路清理。
+
+真机验证待做：`build.sh full` 只能在 NAS 上跑，wasm 补装块（含 `DSH_OFFICE_WASM=0` 分支）
+与 `probe/05` 的 `--dump-config` 挂载检查需装机后实测（DEVLOG 38.1）。
 
 ### 11.4 一个被否掉的"机会"
 

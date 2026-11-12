@@ -11,15 +11,15 @@
 
 | 项 | 值 |
 |---|---|
-| 包版本 | **0.9.2（真机 0.9.1 已验收；0.9.2 为性能优化版，待重打包装机）**。相对 0.7.3 的关键变化：<br>① **0.8.0 多网卡入口（已真机验证）**：dsh 的 CLI 拒绝「通配地址」，只接受某个具体接口的 IP（[HARNESS-ARCHITECTURE §5.1](docs/HARNESS-ARCHITECTURE.md)），所以以前只有被选中的那个地址能进——真机 .109（无线）/ .114（OVS）并存时，从另一个网段点图标就是连接被拒。现在启动时枚举本机 IPv4：dsh 仍绑主地址，其余地址由新增的 `relay` 在 **TCP 层**原样接住（不改 Host、不改字节，WS 与 cookie 都不受影响），并登记进 `--trusted-host`；跳转器改为通配监听、按「请求从哪个地址进来」选 302 目标（白名单校验，防 DNS rebinding）。单网卡机器行为不变。<br>② **0.8.1 Office 技能（已真机验证）**：web 形态默认不挂 `skill-office`，而它的渲染引擎早随 dsh 装进了包里（wasm，约 152MB，一直闲置）。现在用 `--patch` 覆盖层挂上，换来「渲染预览 / 公式重算 / 导出 PDF」，**失败即降级**（三条路径缺一就不传 `--patch`）。<br>③ **0.9.x 引擎跟到 `0.2.2-rc.1`**：封装契约逐项核验无破坏（DEVLOG 37.7），Office 三技能真机实测通过（37.8）<br>④ **0.9.2 性能优化**：node_modules 瘦身（897M→745M、6.9 万→5.4 万个文件）+ Node 24 原生 V8 字节码缓存（冷启动 5-6 秒→4 秒）<br>本地自测 65 通过 / 32 跳过 / 0 失败（Windows；dsh 编排段需 Linux） |
+| 包版本 | **0.9.3（真机 0.9.1 已验收；0.9.2 性能优化、0.9.3 引擎升级，待重打包装机）**。相对 0.7.3 的关键变化：<br>① **0.8.0 多网卡入口（已真机验证）**：dsh 的 CLI 拒绝「通配地址」，只接受某个具体接口的 IP（[HARNESS-ARCHITECTURE §5.1](docs/HARNESS-ARCHITECTURE.md)），所以以前只有被选中的那个地址能进——真机 .109（无线）/ .114（OVS）并存时，从另一个网段点图标就是连接被拒。现在启动时枚举本机 IPv4：dsh 仍绑主地址，其余地址由新增的 `relay` 在 **TCP 层**原样接住（不改 Host、不改字节，WS 与 cookie 都不受影响），并登记进 `--trusted-host`；跳转器改为通配监听、按「请求从哪个地址进来」选 302 目标（白名单校验，防 DNS rebinding）。单网卡机器行为不变。<br>② **0.8.1 Office 技能（已真机验证）**：web 形态默认不挂 `skill-office`，而它的渲染引擎早随 dsh 装进了包里（wasm，约 152MB，一直闲置）。现在用 `--patch` 覆盖层挂上，换来「渲染预览 / 公式重算 / 导出 PDF」，**失败即降级**（三条路径缺一就不传 `--patch`；该覆盖层 0.9.3 起退役，改由上游内置挂载）。<br>③ **0.9.x 引擎跟到 `0.2.2-rc.1`**：封装契约逐项核验无破坏（DEVLOG 37.7），Office 三技能真机实测通过（37.8）<br>④ **0.9.2 性能优化**：node_modules 瘦身（897M→745M、6.9 万→5.4 万个文件）+ Node 24 原生 V8 字节码缓存（冷启动 5-6 秒→4 秒）<br>⑤ **0.9.3 引擎跟到 `0.2.2-rc.2`**：上游重构 Office 链路——web profile 内置挂载 dsh-office-kit + skill-office（4 技能：总纲/docx/pptx/xlsx），0.8.1 的 `--patch` 覆盖层退役；渲染引擎 `libreoffice-kit-wasm`（约 152MB）不再随依赖自动装，由 build.sh 按主包版本补装（`DSH_OFFICE_WASM=0` 可跳过）；CLI 契约不变（DEVLOG 38.1）<br>本地自测 65 通过 / 32 跳过 / 0 失败（Windows；dsh 编排段需 Linux） |
 | 上一版验收 | **0.9.1 已在 NAS 真机装成并验收（2026-11-07）**：`probe/05` **54 PASS / 1 WARN / 0 FAIL**、`probe/07` **11 PASS / 0 FAIL**；多网卡转发、Office 三技能、插件安装链、pnpm/npm 转发链全部实测通过（DEVLOG 37.7/37.8） |
 | 更早的真机验收 | 0.7.3（2026-11-01）：升级快照改落 `@appshare/dsh/backups`、启动时按 `.modules.yaml` 自动对齐 pnpm store；0.6.7（2026-10-28）：图标、启停入口、「访问权限」页确认 |
 | 数据落点 | 共享目录 `dsh/workspace/.dsh-home`（**跨卸载存活**，已实测） |
 | 默认工作区 | `dsh/workspace/deepseek-harness/default-workspace`（0.6.6 起自动建；原理见 [ISSUES F22](docs/ISSUES.md)） |
 | 任意文件夹当工作区 | 应用设置 →「访问权限」授权目录（读写）→ dsh 里「+ 添加工作区」→ 点首屏的 **「可访问目录」** 选中（0.6.8 起；见 [ISSUES F23](docs/ISSUES.md) / [F24](docs/ISSUES.md)） |
 | 多网卡访问 | 0.8.0 起自动：主地址由 dsh 直服，其余本机 IPv4 由 `relay` 接住并加入 `--trusted-host`。手工指定用 `DSH_EXTRA_IPS=192.168.0.109,192.168.0.114`（逗号分隔，排障用） |
-| Office 文档 | 0.8.1 起 **渲染预览 / 公式重算 / 导出 PDF** 可用（dsh 自带的 LibreOffice Kit，无需系统装 LibreOffice），0.9.1 真机三技能实测通过（2026-11-07）。**生成** docx/xlsx/pptx 需要宿主 Python 库，见 [HARNESS-FEATURES §3.1](docs/HARNESS-FEATURES.md) |
-| 运行时 | 自带 Node 24（`v24.22.1`，满足 dsh `engines >=24.9.0`）+ `@deepseek-ai/dsh@0.2.2-rc.1`（0.9.0 起；钉版理由与升级记录见 [PLAN §3.2](PLAN.md)。注意：文件修改前读取检查与外部修改防护上游默认关闭）。0.9.2 起给 dsh 配 V8 字节码缓存（落 `@appdata/dsh/compile-cache`，随卸载消失，损坏删掉自动重建） |
+| Office 文档 | 0.8.1 起 **渲染预览 / 公式重算 / 导出 PDF** 可用（dsh 自带的 LibreOffice Kit，无需系统装 LibreOffice），0.9.1 真机三技能实测通过（2026-11-07）；0.9.3 起挂载方式由 `--patch` 覆盖层改为上游 web profile 内置（dsh 0.2.2-rc.2）。**生成** docx/xlsx/pptx 需要宿主 Python 库，见 [HARNESS-FEATURES §3.1](docs/HARNESS-FEATURES.md) |
+| 运行时 | 自带 Node 24（`v24.22.1`，满足 dsh `engines >=24.9.0`）+ `@deepseek-ai/dsh@0.2.2-rc.2`（0.9.3 起，此前 0.9.0–0.9.2 为 rc.1；钉版理由与升级记录见 [PLAN §3.2](PLAN.md)。注意：文件修改前读取检查与外部修改防护上游默认关闭）。0.9.2 起给 dsh 配 V8 字节码缓存（落 `@appdata/dsh/compile-cache`，随卸载消失，损坏删掉自动重建） |
 | 插件 | 0.7.0 起运行时**成套自带 pnpm 10.34.9 + npm 11.21.1**（`runtime/pnpm`、`runtime/npm`，各配 `runtime/node/bin/` 下的 wrapper）。dsh 装插件只 spawn 裸命令 `pnpm`（缺了报 `spawn pnpm ENOENT`，[F28](docs/ISSUES.md)），而 pnpm 的 `view`/`add` 又会把请求转发给裸命令 `npm`（缺了会落到系统那份 10.9.3，被自带 node 24 跑起来就崩，[F29](docs/ISSUES.md)）。插件装进 `.dsh-home` 下的 profile 子目录，**需要能访问 npm registry**（默认 npmmirror），装完重启应用一次才加载 |
 | 尺寸 | 包内 `app/` **约 745MB / 5.4 万个文件**（0.9.2 瘦身后实测，瘦身前 897M / 6.9 万）；fnpack 压出的 **`dsh.fpk` 约 216MB**（0.9.x 实测） |
 | 已知问题 | 见 [docs/ISSUES.md](docs/ISSUES.md) |
@@ -100,7 +100,7 @@ bash ~/dsh-fnos/probe/07-cookie-persistence.sh  # 会重启一次应用，验证
 日常使用就是浏览器里的 dsh 界面（对话、技能、终端、文件工具都在里面）。使用侧须知：
 
 - 技能与功能的开箱/开关状态：[HARNESS-FEATURES](docs/HARNESS-FEATURES.md)；
-- Office 文档预览、公式重算、导出 PDF（0.8.1 起可用）：见「当前状态」② 与
+- Office 文档预览、公式重算、导出 PDF（0.8.1 起可用，0.9.3 起由上游内置挂载）：见「当前状态」② 与
   [ISSUES「F37」](docs/ISSUES.md)；
 - 本地插件（DuckDuckGo 搜索）与 pnpm/npm 转发链：[fpk/README](fpk/README.md)；
 - 配置项（API Key、入口方式、可访问目录）在安装/升级向导里改，说明见

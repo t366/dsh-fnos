@@ -38,7 +38,7 @@ bash selftest.sh          # 30 秒，不需要 root、不占 3080
 bash build.sh full        # 捆绑 node + dsh + pnpm + npm；包内约 745MB（0.9.2 瘦身后），压出的 dsh.fpk 约 216MB
 ```
 
-`full` 会把 `nodejs_v24` 的 node、`@deepseek-ai/dsh@0.2.2-rc.1`、`pnpm@10.34.9` 与
+`full` 会把 `nodejs_v24` 的 node、`@deepseek-ai/dsh@0.2.2-rc.2`、`pnpm@10.34.9` 与
 `npm@11.21.1` 装进 `app/runtime/`（dsh 版本钉在 `build.sh` 顶部，可用 `DSH_VERSION=` 覆盖，
 钉版理由见 PLAN §3.2；pnpm 用 `DSH_PNPM_VERSION=`、npm 用 `DSH_NPM_VERSION=` 覆盖）。
 两个包管理器都要，理由是 [ISSUES F28](../docs/ISSUES.md) / [F29](../docs/ISSUES.md)：
@@ -62,10 +62,10 @@ dsh 装插件只 `spawn("pnpm")`，缺 pnpm 报 `spawn pnpm ENOENT`；而 pnpm �
 | 依赖 | 版本 | 作用 | 安装方式 |
 |---|---|---|---|
 | Node.js（linux-x64） | `v24.22.1` | dsh 与四个自写 mjs 服务（launcher / relay / stub / ensure-default-workspace）的运行时；满足 dsh `engines >=24.9.0` | `build.sh` 从 nodejs.org 下载官方压缩包并校验后解入 `app/runtime/node` |
-| `@deepseek-ai/dsh` | `0.2.2-rc.1` | 应用本体（DeepSeek Harness web 形态） | `build.sh` 用 `DSH_VERSION`（默认钉在脚本顶部）从 npm 安装 |
+| `@deepseek-ai/dsh` | `0.2.2-rc.2` | 应用本体（DeepSeek Harness web 形态） | `build.sh` 用 `DSH_VERSION`（默认钉在脚本顶部）从 npm 安装 |
 | pnpm | `10.34.9` | 插件安装链的包管理器（dsh 只 `spawn("pnpm")`，[F28](../docs/ISSUES.md)） | `build.sh` 用 `DSH_PNPM_VERSION` 装入 `app/runtime/pnpm` |
 | npm | `11.21.1` | pnpm `view`/`add` 的转发目标（裸命令 `npm`，[F29](../docs/ISSUES.md)） | `build.sh` 用 `DSH_NPM_VERSION` 装入 `app/runtime/npm` |
-| skill-office | 随 dsh 附带 | Office 渲染/重算/导出的 wasm 引擎（0.8.1 起经 `--patch` 挂载，[F37](../docs/ISSUES.md)） | dsh 包内自带，`cmd/main` 挂载 |
+| skill-office | 随 dsh 附带 | Office 四技能（总纲/docx/pptx/xlsx）；0.9.3 起 web profile 内置挂载（[F37](../docs/ISSUES.md)） | dsh 包内自带，随 profile 生效；渲染引擎 `libreoffice-kit-wasm` 由 `build.sh` 按主包版本补装（`DSH_OFFICE_WASM=0` 可跳过） |
 
 构建期依赖（NAS 本机，不进包）：`fnpack`（fnOS 打包器）、bash 4+、coreutils、`ss`、`curl`。
 开发期工具（Windows/任意机器）：bash（Git Bash 即可）、node、python3（仅 `scripts/make-icons.py`）、shellcheck（静态检查，可选）。
@@ -264,7 +264,6 @@ bash ~/dsh-fnos/probe/07-cookie-persistence.sh # 重启后点图标还能不能�
 | `app/runtime/launcher/` | 入口跳转器（纯 node 内建模块，无依赖） |
 | `app/runtime/relay/` | 0.8.0 起：多网卡 TCP 中继，把非绑定地址上的 3081 原样转到 dsh |
 | `app/runtime/stub/` | 骨架包的占位服务 |
-| `app/runtime/profile/` | 0.8.1 起：`office.patch.yml`——用 `--patch` 覆盖层给 web 形态挂 `skill-office`（三路径缺一就不挂） |
 | `app/runtime/pnpm/` | 0.6.9 起：`pnpm@10.34.9`（dsh 装插件用），`node/bin/pnpm` 是它的 wrapper |
 | `app/runtime/npm/` | 0.7.0 起：`npm@11.21.1`（pnpm 的 `view`/`config` 转发目标），`node/bin/npm` 是它的 wrapper |
 | `build.sh` | NAS 上打包。`bash build.sh` 骨架 / `bash build.sh full` 捆绑 dsh 与 pnpm+npm |

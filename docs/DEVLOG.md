@@ -1684,3 +1684,50 @@ pid + chown dsh:dsh 五个文件。**教训照旧：手工启动一律 `su -s /b
 **验证**：office 补丁 enabled、插件零 skip、probe/05 PASS 54 / WARN 1 /
 FAIL 0（与优化前持平）。改动提交 b14d6ef，manifest 提 0.9.2（0.9.1 的
 已装机树是就地修补的，下次重打包需 0.9.2 才能覆盖安装）。
+
+## 阶段 38（2026-11-12）　运行时跟到 dsh 0.2.2-rc.2：Office 链路重构，`--patch` 覆盖层退役（包 0.9.3）
+
+### 38.1　上游变更取证（npm + GitHub + tarball 三源）
+
+dist-tags 又不一致了：`latest = 0.2.2-rc.1`（11-12 核查仍指 rc.1，**落后**）、
+`next = 0.2.2-rc.2`（2026-11-12 发布）；GitHub 最新 release 是 `dsh-v0.2.2-rc.2`。
+按「跟 rc 线」惯例选 rc.2。取证方法与 §37.1 相同——rc.1/rc.2 两个 tarball 逐层
+解压比对，`profile-boot` 用 `git diff --no-index` 证明逻辑等价。
+
+rc.2 的核心变更（0.2.2 线第一次动到封装契约）：
+
+| 变更 | 取证 | 对封装的影响 |
+|---|---|---|
+| Office 挂载内置化 | web profile 的 `cordis.patch.yml` 内置挂载 `dsh-office-kit` + `skill-office`（原文 "Every profile uses the packaged Office skills"） | 0.8.1 的 `--patch` 覆盖层整个退役 |
+| skill-office 收窄 | 技能 7→4（删 office-render/recalculate/export-pdf，渲染能力收进 office-kit）；Config schema 收窄为 `{assetRoot, pythonEnvironment}` | 旧补丁里的 `cli`/`node` 字段不再合法，留着补丁会让插件注册失败拖垮启动 |
+| 渲染引擎独立 | `libreoffice-kit-wasm`（约 152MB）成为独立包且无人自动安装（rc.1 时代经 libreoffice-kit 0.1.5 的 optionalDependencies 随装） | `build.sh` full 模式按 libreoffice-kit 主包版本回读补装 |
+| 引擎定位方式 | office-kit 用 `createRequire(kitEntry).resolve(".../libreoffice-kit-wasm/package.json")` | 平铺 node_modules 补装即可被发现 |
+| bundle 退役 | `RETIRED_BUNDLES` 含 experimental-agent-team-profile / schedule-bundle，app-boot 自动移除 | 老用户零手工迁移；cua-bundle 转 OPTIONAL（纯 JS，web 模板不激活） |
+| npm 包随附文档 | dsh tarball 25KB→2.2MB（新增 `docs/`、`src/`） | 瘦身清单的 docs prune 顺路清理 |
+
+不变项（逐项核验）：CLI 契约（`--profile/--host/--port/--trusted-host/--patch/--dump-config`、
+`DSH_HOME`、0.0.0.0 拒绝）、`engines.node >= 24.9.0`、web 模板 `[dsh-base, dsh-web-app]`、
+`trustedHosts` 机制（多网卡中继不受影响）。取证细节见
+[HARNESS-ARCHITECTURE §11.3.2](HARNESS-ARCHITECTURE.md)。
+
+### 38.2　适配改动（全部围绕"补丁退役 + 引擎补装"）
+
+| 文件 | 改动 |
+|---|---|
+| `fpk/cmd/main` | 删 `office_patch()` 与 `OFFICE_PATCH` 变量，启动命令不再传 `--patch`（留注释说明 0.9.3 起 web profile 内置挂载） |
+| `fpk/app/runtime/profile/office.patch.yml` | 删除（git 有历史） |
+| `fpk/build.sh` | `DSH_VERSION` 钉 `0.2.2-rc.2`；补丁静态校验块替换为 **wasm 补装块**（按 libreoffice-kit 主包版本 `npm install --no-save`，装后验目录存在；`DSH_OFFICE_WASM=0` 跳过并明示功能损失）；CRLF 清理列表、瘦身注释、必需文件检查同步 |
+| `fpk/probe/02-smoke-dsh.sh` | 默认 `PKG` 钉 rc.2 |
+| `fpk/probe/05-verify-fpk.sh` | Office 检查改判据：技能资产目录 + wasm 引擎目录存在性 + `--dump-config`（用捆绑 node 解析 dsh bin）数 `dsh-office-kit`/`dsh-skill-office` 挂载 |
+| `fpk/manifest` | 0.9.3 + changelog |
+
+### 38.3　验证与遗留
+
+- 本机验证：selftest **65 PASS / 32 SKIP / 0 FAIL**（与基准一致）；shellcheck
+  逐条核对全部为存量基线告警，无一落在本次改动行；`node --check` 3 个 mjs 全过。
+- **真机验证待做**（`build.sh full` 只能在 NAS 上跑）：
+  1. full 打包走通，确认 wasm 补装块在真机网络下成功（152MB 下载）；
+  2. `DSH_OFFICE_WASM=0` 分支实测一次（跳过路径的提示文案与 probe/05 的 WARN 对齐）；
+  3. 装机后跑 `probe/05-verify-fpk.sh`，确认 `--dump-config` 数出 office-kit/skill-office
+     挂载、wasm 目录 PASS；
+  4. 浏览器实测 Office 渲染预览 / 公式重算 / 导出 PDF 三技能与 0.9.1 真机结果持平。
