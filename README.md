@@ -73,8 +73,9 @@ PLAN.md                 技术方案
 **打包（只有这一步在命令行，必须在 NAS 上）**
 
 ```bash
-cd ~/dsh-fnos && git pull
-cd fpk && bash build.sh full
+git clone https://github.com/t366/dsh-fnos.git
+cd ~/dsh-fnos/fpk/
+bash build.sh full
 ```
 
 `build.sh` 会先跑 `selftest.sh`，自测不过就中止打包（可用 `DSH_SKIP_SELFTEST=1` 跳过，
