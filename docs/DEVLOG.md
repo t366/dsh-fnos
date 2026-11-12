@@ -1725,9 +1725,30 @@ rc.2 的核心变更（0.2.2 线第一次动到封装契约）：
 
 - 本机验证：selftest **65 PASS / 32 SKIP / 0 FAIL**（与基准一致）；shellcheck
   逐条核对全部为存量基线告警，无一落在本次改动行；`node --check` 3 个 mjs 全过。
-- **真机验证待做**（`build.sh full` 只能在 NAS 上跑）：
-  1. full 打包走通，确认 wasm 补装块在真机网络下成功（152MB 下载）；
-  2. `DSH_OFFICE_WASM=0` 分支实测一次（跳过路径的提示文案与 probe/05 的 WARN 对齐）；
-  3. 装机后跑 `probe/05-verify-fpk.sh`，确认 `--dump-config` 数出 office-kit/skill-office
-     挂载、wasm 目录 PASS；
-  4. 浏览器实测 Office 渲染预览 / 公式重算 / 导出 PDF 三技能与 0.9.1 真机结果持平。
+- 后台复核打包时 selftest **105 PASS / 0 SKIP / 0 FAIL**（真机 Linux 全断言执行，
+  32 项 SKIP 全部转为真跑）。
+
+### 38.4　真机验证（2026-11-12，包 0.9.3 装机 15:53）
+
+待做四条全部完成（打包与装机由用户在 NAS 上先行完成，`upgrade_callback: ok`）：
+
+| 待做项 | 实测 |
+|---|---|
+| 1. full 打包 wasm 补装（152MB） | ✅ `probe/05`：`libreoffice-kit-wasm 已按主包版本补装（Linux 走 wasm）` |
+| 2. `DSH_OFFICE_WASM=0` 分支 | ✅ `DSH_ALLOW_SAME_VERSION=1 DSH_OFFICE_WASM=0` 重打包（不装机），日志输出跳过文案，selftest 全过 |
+| 3. `probe/05` 验收 | ✅ **54 PASS / 1 WARN / 0 FAIL**：`Office 技能挂载（web profile 内置）office-kit 与 skill-office 均在最终配置中`、`Office 技能资产 4 个技能目录`、`dsh 版本 0.2.2-rc.2`；WARN 为探测 3081 的地址推断差异（dsh 绑 .114、probe 探回环），0.9.1 同为 54/1 |
+| 4. 浏览器实测 Office 三技能 | ✅ UI `/` 候选含 **office / office-docx / office-pptx / office-xlsx** 四技能（`api/skills/list` 200，32 请求全 200）；真跑一次 xlsx 任务：**office_recalculate 真实调用，A1=1/B1=2/C1==A1+B1 重算 = 3、公式保留完整**，交付 `sum_demo.xlsx`——与 0.9.1 持平 |
+
+入口链路复验：launcher 3080 通配、relay `.109→.114`、healthz 200、
+`--trusted-host` 生效（T6 持续验证）。
+
+**包体变化（rc.2 依赖变重）**：app/ **71227 文件 / 1.1G**（0.9.2 为 5.4 万 / 745MB）；
+node_modules 1212M → 瘦身后 927M（`DSH_OFFICE_WASM=0` 口径，不含 wasm 152M；含 wasm
+约 1.08G）。增量来自 rc.2 web profile 内置的 office-kit/skill-office 链路与新增依赖，
+fpk（WASM=0 版）222M。
+
+**升级后现象（非包缺陷，记录备查）**：`info.log` 里两条用户自装插件被 rc.2 拒绝——
+① `@local/uparrow-history` 钉死依赖 `0.2.2-rc.1`，dsh 主动跳过（提示可用
+`dsh plugin allow-version` 豁免）；② `companion-memory` 的 storage domain 名含连字符，
+rc.2 的 `dsh-storage-domain` 校验 `/^[a-z][a-z0-9_]*$/` 不再放行。均为上游收严
+兼容性闸门的预期行为，Office 主线不受影响。
